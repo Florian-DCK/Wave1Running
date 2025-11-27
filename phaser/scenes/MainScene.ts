@@ -2,8 +2,8 @@ import * as Phaser from "phaser";
 
 export class MainScene extends Phaser.Scene {
     // --- Vitesse réelle & entrée joueur ---
-    private speed = 1000;              // vitesse utilisée pour le scroll
-    private targetSpeed = 1000;        // vitesse "entrée" montée avec ESPACE
+    private speed = 0;              // vitesse utilisée pour le scroll
+    private targetSpeed = 0;        // vitesse "entrée" montée avec Q/D ou TAP
 
     // --- Vitesse cible (rythme imposé par le jeu) ---
     private goalSpeed = 0;         // valeur actuelle affichée
@@ -12,7 +12,7 @@ export class MainScene extends Phaser.Scene {
 
     // --- Config gameplay ---
     private maxTargetSpeed = 2000;        // vitesse max
-    private targetBoostPerPress = 100;    // gain de targetSpeed à chaque ESPACE
+    private targetBoostPerPress = 100;    // gain de targetSpeed par "pas"
     private baseDecayPerSecond = 200;
     private extraDecayPerSecond = 500;
     private speedFollowStrength = 5;      // interpolation speed -> targetSpeed
@@ -34,10 +34,14 @@ export class MainScene extends Phaser.Scene {
     // --- Objets de la scène ---
     private bg!: Phaser.GameObjects.TileSprite;
     private runner!: Phaser.GameObjects.Rectangle;
-    private spaceKey!: Phaser.Input.Keyboard.Key;
     private speedText!: Phaser.GameObjects.Text;
     private targetText!: Phaser.GameObjects.Text;
     private goalText!: Phaser.GameObjects.Text;
+
+    // --- Contrôles clavier Q/D ---
+    private leftStepKey!: Phaser.Input.Keyboard.Key;   // Q
+    private rightStepKey!: Phaser.Input.Keyboard.Key;  // D
+    private lastStepSide: "left" | "right" | null = null;
 
     // --- Jauge type compteur ---
     private gaugeContainer!: Phaser.GameObjects.Container;
@@ -79,7 +83,7 @@ export class MainScene extends Phaser.Scene {
 
         // ====== TEXTS DEBUG ======
         this.add
-            .text(10, 10, "Tape ESPACE ou TAP pour courir !", {
+            .text(10, 10, "Tape Q et D en quinconce ou TAP pour courir !", {
                 fontSize: "18px",
                 color: "#ffffff",
             })
@@ -114,14 +118,20 @@ export class MainScene extends Phaser.Scene {
             })
             .setScrollFactor(0);
 
-        // ====== INPUT CLAVIER (ESPACE) ======
-        this.spaceKey = this.input.keyboard.addKey(
-            Phaser.Input.Keyboard.KeyCodes.SPACE
+        // ====== INPUT CLAVIER (Q / D en quinconce) ======
+        this.leftStepKey = this.input.keyboard.addKey(
+            Phaser.Input.Keyboard.KeyCodes.LEFT
         );
-        this.spaceKey.on("down", () => this.boost());
+        this.rightStepKey = this.input.keyboard.addKey(
+            Phaser.Input.Keyboard.KeyCodes.RIGHT
+        );
+
+        this.leftStepKey.on("down", () => this.handleKeyboardStep("left"));
+        this.rightStepKey.on("down", () => this.handleKeyboardStep("right"));
 
         // ====== CONTROLES MOBILE SUR TAP ======
         this.input.on("pointerdown", () => {
+            // sur mobile : chaque tap = boost (pas besoin d'alterner)
             this.boost();
         });
 
@@ -211,6 +221,20 @@ export class MainScene extends Phaser.Scene {
         this.gaugeContainer.add(centerDot);
     }
 
+    // Appui clavier : on vérifie l'alternance Q / D
+    private handleKeyboardStep(side: "left" | "right") {
+        if (this.gameOver) return;
+
+        // si on appuie deux fois de suite sur la même touche → pas de boost
+        if (this.lastStepSide === side) {
+            return;
+        }
+
+        this.lastStepSide = side;
+        this.boost();
+    }
+
+    // Boost brut (utilisé par clavier valide + mobile)
     private boost() {
         if (this.gameOver) return;
 
@@ -225,11 +249,10 @@ export class MainScene extends Phaser.Scene {
         const dt = delta / 1000;
 
         if (this.gameOver) {
-            // On pourrait garder le scroll ou non, ici on freeze tout
             return;
         }
 
-        // 1) La targetSpeed (entrée joueur) diminue progressivement (decay dynamique)
+        // 1) La targetSpeed (entrée joueur) diminue progressivement
         if (this.targetSpeed > 0) {
             const ratio = this.targetSpeed / this.maxTargetSpeed; // 0 → 1
 
