@@ -1,47 +1,44 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { MainScene } from "@/phaser/scenes/MainScene";
 
 export default function PhaserGame() {
     const containerRef = useRef<HTMLDivElement | null>(null);
-    const gameRef = useRef<any>(null); // tu peux typer mieux après
+    const gameRef = useRef<any>(null);
 
     useEffect(() => {
-        let isCancelled = false;
+        let game: any;
 
-        // On est sûr d’être côté client ici
-        const loadGame = async () => {
-            if (!containerRef.current || gameRef.current) return;
+        async function loadPhaser() {
+            const Phaser = await import("phaser"); // ⬅️ LOADED CLIENT SIDE ONLY
 
-            // 🔥 Import dynamique de Phaser (pas d’SSR)
-            const Phaser = await import("phaser");
-            const { MainScene } = await import("@/phaser/scenes/MainScene");
+            const container = containerRef.current;
+            if (!container) return;
 
-            if (isCancelled) return;
+            const width = container.clientWidth;
+            const height = container.clientHeight;
 
-            const config: Phaser.Types.Core.GameConfig = {
+            game = new Phaser.Game({
                 type: Phaser.AUTO,
-                width: window.innerWidth,
-                height: window.innerHeight,
-                parent: containerRef.current, // on peut passer directement l’élément
+                width,
+                height,
+                parent: container,
                 scene: [MainScene],
                 scale: {
                     mode: Phaser.Scale.RESIZE,
                     autoCenter: Phaser.Scale.CENTER_BOTH,
                 },
-            };
+            });
 
-            const game = new Phaser.Game(config);
             gameRef.current = game;
-        };
+        }
 
-        loadGame();
+        loadPhaser();
 
         return () => {
-            isCancelled = true;
             if (gameRef.current) {
                 gameRef.current.destroy(true);
-                gameRef.current = null;
             }
         };
     }, []);
@@ -49,7 +46,14 @@ export default function PhaserGame() {
     return (
         <div
             ref={containerRef}
-            style={{ width: "100vw", height: "100vh", overflow: "hidden" }}
+            style={{
+                position: "fixed",
+                inset: 0,
+                width: "100vw",
+                height: "100vh",
+                overflow: "hidden",
+                background: "black",
+            }}
         />
     );
 }
