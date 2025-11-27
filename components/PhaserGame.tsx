@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { MainScene } from "@/phaser/scenes/MainScene";
 
 export default function PhaserGame() {
     const containerRef = useRef<HTMLDivElement | null>(null);
@@ -12,6 +11,7 @@ export default function PhaserGame() {
 
         async function loadPhaser() {
             const Phaser = await import("phaser"); // ⬅️ LOADED CLIENT SIDE ONLY
+            const { MainScene } = await import("@/phaser/scenes/MainScene");
 
             const container = containerRef.current;
             if (!container) return;
@@ -50,7 +50,7 @@ export default function PhaserGame() {
                 position: "fixed",
                 inset: 0,
                 width: "100vw",
-                height: "100vh",
+                height: "100dvh",
                 overflow: "hidden",
                 background: "black",
             }}
