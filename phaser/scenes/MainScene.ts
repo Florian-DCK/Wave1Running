@@ -17,6 +17,7 @@ export class MainScene extends Phaser.Scene {
 	private bg!: Phaser.GameObjects.TileSprite;
 	private ground!: Phaser.GameObjects.TileSprite;
 	private houses!: Phaser.GameObjects.TileSprite;
+	private housesHeight = 300; // hauteur par défaut pour phase 1
 	private runner!: Phaser.GameObjects.Sprite;
 	private runnerHitbox!: Phaser.GameObjects.Rectangle;
 	private spaceKey!: Phaser.Input.Keyboard.Key;
@@ -53,6 +54,12 @@ export class MainScene extends Phaser.Scene {
 	// multiplicateur pour augmenter le nombre de pas gagnés pour la même distance
 	private stepMultiplier = this.isMobile ? 2.5 : 5; // 2 = double les pas pour une même distance
 	private goalReached = false;
+
+	// --- Phases du niveau (0 = phase1, 1 = phase2, 2 = phase3, 3 = phase4) ---
+	private currentPhase = 0;
+	private isTransitioning = false;
+	private fadeOverlay?: Phaser.GameObjects.Graphics;
+	private phaseThresholds = [0.25, 0.5, 0.75]; // 25%, 50%, 75%
 
 	// --- Messages de progression ---
 	private tutorialText?: Phaser.GameObjects.Text;
@@ -103,8 +110,27 @@ export class MainScene extends Phaser.Scene {
 		this.walkFrameKeys = [];
 		this.obstacleTextureKeys = [];
 		this.load.image('bg', '/assets/ciel.png');
-		this.load.image('ground', '/assets/level1/phase1/sol.png');
-		this.load.image('houses', '/assets/level1/phase1/maison.png');
+
+		// Charger les assets des 4 phases
+		// Phase 1: maison + plante
+		this.load.image('ground_phase1', '/assets/level1/phase1/sol.png');
+		this.load.image('houses_phase1', '/assets/level1/phase1/maison.png');
+		this.load.image('bush_phase1', '/assets/level1/phase1/plante.png');
+
+		// Phase 2: bulding + plante
+		this.load.image('ground_phase2', '/assets/level1/phase2/sol.png');
+		this.load.image('houses_phase2', '/assets/level1/phase2/bulding.png');
+		this.load.image('bush_phase2', '/assets/level1/phase2/plante.png');
+
+		// Phase 3: office (pas de plante)
+		this.load.image('ground_phase3', '/assets/level1/phase3/sol.png');
+		this.load.image('houses_phase3', '/assets/level1/phase3/office.png');
+
+		// Phase 4: maison + plante
+		this.load.image('ground_phase4', '/assets/level1/phase4/sol.png');
+		this.load.image('houses_phase4', '/assets/level1/phase4/maison.png');
+		this.load.image('bush_phase4', '/assets/level1/phase4/plante.png');
+
 		this.load.image('character_idle', '/assets/character_idle.png');
 		const transitionFrames = 27;
 		for (let i = 0; i < transitionFrames; i++) {
@@ -127,7 +153,6 @@ export class MainScene extends Phaser.Scene {
 			);
 		}
 		this.load.image('steps_icon', '/assets/Steps.png');
-		this.load.image('bush', '/assets/level1/phase1/plante.png');
 		this.load.image('hearts_icon', '/assets/vie.png');
 		if (this.transitionFrameKeys.length > 0) {
 			this.idleTextureKey = this.transitionFrameKeys[0];
@@ -168,11 +193,24 @@ export class MainScene extends Phaser.Scene {
 
 		this.bg = this.add.tileSprite(0, 0, width, height, 'bg').setOrigin(0, 0);
 		this.fitBackgroundToHeight(width, height);
+		const groundHeight = 270;
 		this.houses = this.add
-			.tileSprite(0, height - 570, width, 300, 'houses')
+			.tileSprite(
+				0,
+				height - groundHeight - this.housesHeight,
+				width,
+				this.housesHeight,
+				'houses_phase1'
+			)
 			.setOrigin(0, 0);
 		this.ground = this.add
-			.tileSprite(0, height - 270, width, 270, 'ground')
+			.tileSprite(
+				0,
+				height - groundHeight,
+				width,
+				groundHeight,
+				'ground_phase1'
+			)
 			.setOrigin(0, 0);
 		this.scale.on('resize', this.handleResize, this);
 
@@ -300,6 +338,15 @@ export class MainScene extends Phaser.Scene {
 		// ===== INIT PLANTES =====
 		this.bushSpawnTimer = 0;
 		this.bushes = [];
+
+		// ===== OVERLAY DE FONDU POUR TRANSITIONS =====
+		this.fadeOverlay = this.add
+			.graphics()
+			.setDepth(1000)
+			.setScrollFactor(0)
+			.setAlpha(0);
+		this.fadeOverlay.fillStyle(0xffffff, 1);
+		this.fadeOverlay.fillRect(0, 0, width, height);
 	}
 
 	// Planifie le prochain temps d'apparition d'un obstacle en appliquant
@@ -401,6 +448,20 @@ export class MainScene extends Phaser.Scene {
 
 				// Afficher des messages selon le nombre de pas
 				this.checkStepMilestones();
+
+				// Vérifier les changements de phase à 25%, 50%, 75%
+				if (!this.isTransitioning) {
+					for (let i = 0; i < this.phaseThresholds.length; i++) {
+						const threshold = this.phaseThresholds[i];
+						const nextPhase = i + 1;
+
+						// Si on vient de dépasser ce seuil et qu'on n'est pas déjà à cette phase
+						if (ratio >= threshold && this.currentPhase < nextPhase) {
+							this.transitionToPhase(nextPhase);
+							break;
+						}
+					}
+				}
 
 				if (this.steps >= this.targetSteps) {
 					this.goalReached = true;
@@ -529,9 +590,12 @@ export class MainScene extends Phaser.Scene {
 
 		// ===== 4) GESTION DES PLANTES AU SOL =====
 
-		// Spawn de plantes aléatoires
+		// Spawn de plantes aléatoires (sauf en phase 3)
 		this.bushSpawnTimer += dt;
-		if (this.bushSpawnTimer >= this.bushSpawnInterval) {
+		if (
+			this.bushSpawnTimer >= this.bushSpawnInterval &&
+			this.currentPhase !== 2
+		) {
 			this.bushSpawnTimer = 0;
 
 			// Position aléatoire en hauteur (sur le sol ou légèrement au-dessus)
@@ -539,8 +603,9 @@ export class MainScene extends Phaser.Scene {
 			const bushX = width + 100; // apparaissent à droite de l'écran
 
 			const bushScale = this.isMobile ? 0.3 : 1;
+			const phaseNumber = this.currentPhase + 1; // phase 0 = phase1, etc.
 			const bush = this.add
-				.sprite(bushX, bushY, 'bush')
+				.sprite(bushX, bushY, `bush_phase${phaseNumber}`)
 				.setOrigin(0.5, 1)
 				.setScale(bushScale)
 				.setDepth(15);
@@ -735,6 +800,87 @@ export class MainScene extends Phaser.Scene {
 		});
 	}
 
+	private transitionToPhase(newPhase: number) {
+		if (this.isTransitioning || newPhase < 0 || newPhase > 3) {
+			console.log('Transition bloquée:', {
+				isTransitioning: this.isTransitioning,
+				newPhase,
+			});
+			return;
+		}
+
+		console.log(`🎬 DÉBUT Transition vers phase ${newPhase + 1}`);
+		this.isTransitioning = true;
+		const phaseNumber = newPhase + 1; // phase 0 = phase1, etc.
+
+		if (!this.fadeOverlay) {
+			console.error("❌ fadeOverlay n'existe pas !");
+			this.isTransitioning = false;
+			return;
+		}
+
+		console.log('✅ fadeOverlay existe, alpha actuel:', this.fadeOverlay.alpha);
+
+		// Fondu blanc entrant (fade in)
+		this.tweens.add({
+			targets: this.fadeOverlay,
+			alpha: 1,
+			duration: 500,
+			ease: 'Cubic.easeIn',
+			onStart: () => {
+				console.log('▶️ Tween fade IN démarré');
+			},
+			onUpdate: (tween) => {
+				if (tween.progress === 0.5) {
+					console.log('⏱️ Tween à 50%, alpha:', this.fadeOverlay?.alpha);
+				}
+			},
+			onComplete: () => {
+				console.log('⚪ Écran BLANC, changement de phase');
+				// Changer les textures pendant que l'écran est blanc
+				this.currentPhase = newPhase;
+
+				// Déterminer la hauteur selon la phase
+				let newHousesHeight;
+				if (phaseNumber === 1 || phaseNumber === 4) {
+					newHousesHeight = 300; // Phase 1 et 4: maison
+				} else if (phaseNumber === 2) {
+					newHousesHeight = 763; // Phase 2: bulding
+				} else {
+					newHousesHeight = 768; // Phase 3: office
+				}
+				this.housesHeight = newHousesHeight;
+				if (this.ground) {
+					this.ground.setTexture(`ground_phase${phaseNumber}`);
+				}
+				if (this.houses) {
+					const { height } = this.scale;
+					const groundHeight = 270;
+					this.houses.setTexture(`houses_phase${phaseNumber}`);
+					this.houses.setSize(this.houses.width, newHousesHeight);
+					this.houses.setPosition(0, height - groundHeight - newHousesHeight);
+				} // Détruire les anciennes plantes et en créer de nouvelles avec la bonne texture
+				this.bushes.forEach((bush) => bush.destroy());
+				this.bushes = [];
+
+				// Fondu blanc sortant (fade out)
+				this.tweens.add({
+					targets: this.fadeOverlay,
+					alpha: 0,
+					duration: 500,
+					ease: 'Cubic.easeOut',
+					onStart: () => {
+						console.log('▶️ Tween fade OUT démarré');
+					},
+					onComplete: () => {
+						console.log('🏁 Transition TERMINÉE');
+						this.isTransitioning = false;
+					},
+				});
+			},
+		});
+	}
+
 	private drawTopIndicator() {
 		if (!this.topIndicator) return;
 		this.topIndicator.clear();
@@ -913,13 +1059,14 @@ export class MainScene extends Phaser.Scene {
 			this.bg.setTilePosition(0, 0);
 			this.fitBackgroundToHeight(width, height);
 		}
+		const groundHeight = 270;
 		if (this.houses) {
-			this.houses.setSize(width, this.houses.height);
-			this.houses.setPosition(0, height - 570);
+			this.houses.setSize(width, this.housesHeight);
+			this.houses.setPosition(0, height - groundHeight - this.housesHeight);
 		}
 		if (this.ground) {
-			this.ground.setSize(width, this.ground.height);
-			this.ground.setPosition(0, height - 270);
+			this.ground.setSize(width, groundHeight);
+			this.ground.setPosition(0, height - groundHeight);
 		}
 		if (this.runner) {
 			const runnerX = this.isMobile ? width * 0.18 : width * 0.22;
@@ -934,6 +1081,11 @@ export class MainScene extends Phaser.Scene {
 				this.runnerHitbox.setDisplaySize(hitboxWidth, hitboxHeight);
 			}
 			this.impactGroundY = runnerY;
+		}
+		if (this.fadeOverlay) {
+			this.fadeOverlay.clear();
+			this.fadeOverlay.fillStyle(0xffffff, 1);
+			this.fadeOverlay.fillRect(0, 0, width, height);
 		}
 		this.layoutProgressUi(width);
 	}
