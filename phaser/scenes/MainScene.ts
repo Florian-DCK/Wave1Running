@@ -19,25 +19,30 @@ export class MainScene extends Phaser.Scene {
 	private houses!: Phaser.GameObjects.TileSprite;
 	private runner!: Phaser.GameObjects.Sprite;
 	private runnerHitbox!: Phaser.GameObjects.Rectangle;
-	private speedText!: Phaser.GameObjects.Text;
-	private targetText!: Phaser.GameObjects.Text;
 	private spaceKey!: Phaser.Input.Keyboard.Key;
-	private stepsText!: Phaser.GameObjects.Text;
+	private stepsCountText!: Phaser.GameObjects.Text;
+	private stepsGoalText!: Phaser.GameObjects.Text;
+	private stepsIcon!: Phaser.GameObjects.Image;
+	private heartsIcons: Phaser.GameObjects.Image[] = [];
+	private uiFont = 'ChelseaMarket';
+	private uiFontLoaded = false;
+	private progressCircleBg!: Phaser.GameObjects.Graphics;
+	private progressCircleFill!: Phaser.GameObjects.Graphics;
+	private progressCircleStroke!: Phaser.GameObjects.Graphics;
+	private progressBgContainer!: Phaser.GameObjects.Container;
+	private progressCircleRadius = 100;
+	private progressCircleCenterX = 0;
+	private progressCircleCenterY = 0;
+	private currentProgressRatio = 0;
 	private transitionFrameKeys: string[] = [];
 	private walkFrameKeys: string[] = [];
 	private transitionAnimationKey = 'idle_to_run';
-	private walkAnimationKey = 'walk_loop';
+	private walkAnimationKey = 'loop run';
 	private isTransitionPlaying = false;
 	private isWalkLoopPlaying = false;
 	private idleTextureKey = 'character_idle';
 	private obstacleTextureKeys: string[] = [];
-	private runnerScale = 0.3;
-
-	// Progress UI
-	private progressBarBg!: Phaser.GameObjects.Rectangle;
-	private progressBarFill!: Phaser.GameObjects.Rectangle;
-	private progressBarWidth = 240;
-	private progressBarHeight = 18;
+	private runnerScale = 0.4;
 
 	// --- Compteur de pas ---
 	private distanceTravelled = 0; // en pixels
@@ -48,6 +53,11 @@ export class MainScene extends Phaser.Scene {
 	// multiplicateur pour augmenter le nombre de pas gagnés pour la même distance
 	private stepMultiplier = this.isMobile ? 2.5 : 5; // 2 = double les pas pour une même distance
 	private goalReached = false;
+
+	// --- Messages de progression ---
+	private tutorialText?: Phaser.GameObjects.Text;
+	private tutorialTimer?: Phaser.Time.TimerEvent;
+	private lastMilestone = 0;
 
 	// --- Jauge de vitesse (désactivée) ---
 	// private gaugeContainer!: Phaser.GameObjects.Container;
@@ -61,6 +71,8 @@ export class MainScene extends Phaser.Scene {
 	private impactGroundY = 0;
 	// indicateur visuel (point d'exclamation rouge) remplace la zone rectangle
 	private impactIndicator!: Phaser.GameObjects.Text;
+	// indicateur visuel en haut de l'écran
+	private topIndicator!: Phaser.GameObjects.Graphics;
 
 	// --- Obstacles qui tombent du ciel ---
 	// maintenant on gère plusieurs obstacles en même temps
@@ -68,14 +80,19 @@ export class MainScene extends Phaser.Scene {
 		Phaser.GameObjects.Rectangle | Phaser.GameObjects.Sprite
 	> = [];
 	// on utilise un intervalle fixe pour un spawn plus régulier
-	private obstacleSpawnInterval = 1.5; // secondes
+	private obstacleSpawnInterval = 2.5; // secondes
 	private obstacleFallSpeed = 500; // px/s
 	private obstacleSpawnTimer = 0;
 	private nextObstacleTime = 0;
 	private safeSpeedForObstacle = 200; // en dessous → esquive réussie
 	// Randomness / jitter pour la fréquence de spawn (en secondes)
-	private obstacleSpawnVariance = 0.6; // +/- variance en secondes
-	private minObstacleSpawnInterval = 0.4; // intervalle minimal clampé
+	private obstacleSpawnVariance = 0.8; // +/- variance en secondes
+	private minObstacleSpawnInterval = 1.2; // intervalle minimal clampé
+
+	// --- Plantes qui apparaissent au sol ---
+	private bushes: Phaser.GameObjects.Sprite[] = [];
+	private bushSpawnTimer = 0;
+	private bushSpawnInterval = 4; // secondes entre chaque plante
 
 	constructor() {
 		super('MainScene');
@@ -86,8 +103,8 @@ export class MainScene extends Phaser.Scene {
 		this.walkFrameKeys = [];
 		this.obstacleTextureKeys = [];
 		this.load.image('bg', '/assets/ciel.png');
-		this.load.image('ground', '/assets/sol.png');
-		this.load.image('houses', '/assets/maison.png');
+		this.load.image('ground', '/assets/level1/phase1/sol.png');
+		this.load.image('houses', '/assets/level1/phase1/maison.png');
 		this.load.image('character_idle', '/assets/character_idle.png');
 		const transitionFrames = 27;
 		for (let i = 0; i < transitionFrames; i++) {
@@ -99,16 +116,19 @@ export class MainScene extends Phaser.Scene {
 				`/assets/animations/Arret+Marche/Arret+Marche_${frameId}.png`
 			);
 		}
-		const walkFrames = 34;
-		for (let i = 0; i < walkFrames; i++) {
+		const walkFrames = 19;
+		for (let i = 1; i <= walkFrames; i++) {
 			const frameId = i.toString().padStart(5, '0');
 			const key = `walk_${frameId}`;
 			this.walkFrameKeys.push(key);
 			this.load.image(
 				key,
-				`/assets/animations/marche loop/marche loop_${frameId}.png`
+				`/assets/animations/marche loop/loop run_${frameId}.png`
 			);
 		}
+		this.load.image('steps_icon', '/assets/Steps.png');
+		this.load.image('bush', '/assets/level1/phase1/plante.png');
+		this.load.image('hearts_icon', '/assets/vie.png');
 		if (this.transitionFrameKeys.length > 0) {
 			this.idleTextureKey = this.transitionFrameKeys[0];
 		} else if (this.walkFrameKeys.length > 0) {
@@ -141,7 +161,7 @@ export class MainScene extends Phaser.Scene {
 		this.extraDecayRampDuration = this.isMobile ? 1.0 : 1.5;
 		this.extraDecayMaxMultiplier = this.isMobile ? 1.4 : 2.5;
 		this.stepMultiplier = this.isMobile ? 10 : 5;
-		this.runnerScale = this.isMobile ? 0.32 : 0.25;
+		this.runnerScale = this.isMobile ? 0.4 : 0.4;
 		this.speed = 400;
 
 		// ====== BACKGROUND SCROLLABLE ======
@@ -163,7 +183,7 @@ export class MainScene extends Phaser.Scene {
 			.sprite(runnerX, runnerY, this.idleTextureKey)
 			.setOrigin(0.5, 1)
 			.setScale(this.runnerScale)
-			.setDepth(20);
+			.setDepth(8);
 		this.createRunnerAnimations();
 		const hitboxWidth = this.runner.displayWidth * 0.45;
 		const hitboxHeight = this.runner.displayHeight * 0.7;
@@ -174,82 +194,86 @@ export class MainScene extends Phaser.Scene {
 		this.playWalkLoop();
 
 		// ===== ZONE D'IMPACT AU SOL =====
-		// la zone est vers la droite de l'écran
 		this.impactZoneX = width * 0.7;
-		this.impactGroundY = this.runner.y; // même "sol" que le runner
+		this.impactGroundY = height + 100;
 
 		this.impactZoneWidth = 120;
+
+		// Indicateur visuel en haut de l'écran
+		this.topIndicator = this.add.graphics().setDepth(50);
+		this.drawTopIndicator();
+
+		// Tween de clignotement pour l'indicateur
+		this.tweens.add({
+			targets: this.topIndicator,
+			alpha: 0.3,
+			duration: 400,
+			yoyo: true,
+			repeat: -1,
+			ease: 'Sine.easeInOut',
+		});
 
 		// ajouter un point d'exclamation rouge comme indicateur
 		const exclamSize = this.isMobile ? 48 : 64;
 		this.impactIndicator = this.add
-			.text(this.impactZoneX, this.impactGroundY, '!', {
-				fontFamily: 'Arial',
+			.text(this.impactZoneX, this.impactGroundY, '', {
+				fontFamily: this.uiFont,
 				fontSize: `${exclamSize}px`,
 				color: '#ff0000',
 				stroke: '#000000',
 				strokeThickness: 6,
 			})
-			.setOrigin(0.5, 1);
-
-		// ===== TEXTE DEBUG =====
-		this.speedText = this.add.text(10, 10, 'Speed: 0', {
-			fontSize: '18px',
-			color: '#ffffff',
-		});
-		this.targetText = this.add.text(
-			10,
-			30,
-			'Tape ESPACE / TAP pour accelerer',
-			{
-				fontSize: '14px',
-				color: '#dddddd',
-			}
-		);
-
-		// compteur de pas
-		// UI du compteur centré horizontalement : fond + texte + barre de progression
-		const centerX = width / 2;
-		const uiCenterY = 60;
-		// fond semi-opaque centré
-		this.add
-			.rectangle(
-				centerX,
-				uiCenterY,
-				this.progressBarWidth + 20,
-				56,
-				0x111111,
-				0.6
-			)
-			.setOrigin(0.5, 0.5);
-
-		// texte centré
-		this.stepsText = this.add
-			.text(centerX, uiCenterY - 12, `Pas: 0 / ${this.targetSteps}`, {
-				fontSize: '20px',
-				color: '#ffffff',
-				stroke: '#000000',
-				strokeThickness: 4,
-				backgroundColor: '#000000',
+			.setOrigin(0.5, 1); // compteur de pas circulaire
+		this.progressBgContainer = this.add.container(0, 0).setDepth(6);
+		this.progressCircleBg = this.add.graphics();
+		this.progressBgContainer.add(this.progressCircleBg);
+		// Appliquer un effet de flou au container
+		if (this.progressBgContainer.postFX) {
+			this.progressBgContainer.postFX.addBlur(0, 2, 2, 0.8);
+		}
+		// Contour noir séparé
+		this.progressCircleStroke = this.add.graphics().setDepth(6);
+		this.progressCircleFill = this.add.graphics().setDepth(7);
+		const iconSize = this.isMobile ? 20 : 35;
+		this.stepsIcon = this.add
+			.image(0, 0, 'steps_icon')
+			.setOrigin(0.5)
+			.setDepth(8);
+		this.stepsIcon.setDisplaySize(iconSize, iconSize);
+		// Désactiver le smoothing pour une image plus nette
+		const texture = this.textures.get('steps_icon');
+		if (texture) {
+			texture.setFilter(Phaser.Textures.FilterMode.NEAREST);
+		}
+		this.stepsCountText = this.add
+			.text(0, 0, '0', {
+				fontSize: this.isMobile ? '24px' : '24px',
+				fontFamily: this.uiFont,
+				color: '#111111',
 			})
-			.setOrigin(0.5, 0);
-
-		// barre de progression centrée sous le texte
-		const barX = centerX - this.progressBarWidth / 2;
-		const barY = uiCenterY + 40; // sous le texte
-		this.progressBarBg = this.add
-			.rectangle(
-				centerX,
-				barY,
-				this.progressBarWidth,
-				this.progressBarHeight,
-				0x444444,
-				0.8
-			)
-			.setOrigin(0.5, 0.5);
-		this.progressBarFill = this.add
-			.rectangle(barX, barY, 0, this.progressBarHeight - 4, 0x4caf50, 1)
-			.setOrigin(0, 0.5);
+			.setOrigin(0.5)
+			.setDepth(8);
+		this.stepsGoalText = this.add
+			.text(0, 0, `/ ${this.targetSteps} pas`, {
+				fontSize: this.isMobile ? '18px' : '18px',
+				fontFamily: this.uiFont,
+				color: '#111111',
+			})
+			.setOrigin(0.5)
+			.setDepth(8);
+		const heartsCount = 3;
+		const heartSize = this.isMobile ? 60 : 38;
+		this.heartsIcons = [];
+		for (let i = 0; i < heartsCount; i++) {
+			const heart = this.add
+				.image(0, 0, 'hearts_icon')
+				.setOrigin(0.5)
+				.setDepth(8);
+			heart.setDisplaySize(heartSize, heartSize);
+			this.heartsIcons.push(heart);
+		}
+		this.layoutProgressUi(width);
+		this.ensureUiFontLoaded();
 
 		// ===== INPUTS =====
 		// `this.input` existe à l'exécution; on vérifie pour satisfaire TypeScript
@@ -267,93 +291,34 @@ export class MainScene extends Phaser.Scene {
 			});
 		}
 
-		// ===== JAUGE =====
-		// JAUGE désactivée : le code original reste commenté ci-dessous
-		/*
-        const centerX = width / 2;
-        const gaugeY = isMobile ? height - 80 : height - 100;
-        const radius = 80;
-
-        this.gaugeContainer = this.add.container(centerX, gaugeY);
-
-        const g = this.add.graphics();
-        this.gaugeContainer.add(g);
-
-        const startDeg = this.minGaugeAngleDeg;
-        const endDeg = this.maxGaugeAngleDeg;
-        const midDeg = (startDeg + endDeg) / 2;
-        const colorOffsetDeg = -90;
-        const toRad = (deg: number) => Phaser.Math.DegToRad(deg + colorOffsetDeg);
-
-        // rouge
-        g.lineStyle(16, 0xff4b4b, 1);
-        g.beginPath();
-        g.arc(
-            0,
-            0,
-            radius,
-            toRad(startDeg),
-            toRad(startDeg + (midDeg - startDeg) * 0.5),
-            false
-        );
-        g.strokePath();
-
-        // jaune
-        g.lineStyle(16, 0xffd34b, 1);
-        g.beginPath();
-        g.arc(
-            0,
-            0,
-            radius,
-            toRad(startDeg + (midDeg - startDeg) * 0.5),
-            toRad(midDeg + (endDeg - midDeg) * 0.3),
-            false
-        );
-        g.strokePath();
-
-        // vert
-        g.lineStyle(16, 0x5ad45a, 1);
-        g.beginPath();
-        g.arc(
-            0,
-            0,
-            radius,
-            toRad(midDeg + (endDeg - midDeg) * 0.3),
-            toRad(endDeg),
-            false
-        );
-        g.strokePath();
-
-        g.fillStyle(0x222222, 1);
-        g.fillCircle(0, 0, 10);
-
-        this.gaugeNeedle = this.add
-            .rectangle(0, 0, 4, radius - 10, 0x111111)
-            .setOrigin(0.5, 1);
-        this.gaugeContainer.add(this.gaugeNeedle);
-
-        const centerDot = this.add.circle(0, 0, 6, 0x000000);
-        this.gaugeContainer.add(centerDot);
-        */
-
 		// ===== INIT OBSTACLES =====
 		this.obstacleSpawnTimer = 0;
-		// initialiser le prochain intervalle avec un peu de randomness
-		this.scheduleNextObstacle();
+		// initialiser le prochain intervalle avec un délai initial variable
+		this.scheduleNextObstacle(true);
 		this.fallingObstacles = [];
+
+		// ===== INIT PLANTES =====
+		this.bushSpawnTimer = 0;
+		this.bushes = [];
 	}
 
 	// Planifie le prochain temps d'apparition d'un obstacle en appliquant
 	// un jitter aléatoire autour de `obstacleSpawnInterval`.
-	private scheduleNextObstacle() {
-		// génère une valeur dans [-obstacleSpawnVariance, +obstacleSpawnVariance]
-		const jitter = Phaser.Math.FloatBetween(
-			-this.obstacleSpawnVariance,
-			this.obstacleSpawnVariance
-		);
-		const next = this.obstacleSpawnInterval + jitter;
-		// clamp pour éviter des intervalles trop courts
-		this.nextObstacleTime = Math.max(this.minObstacleSpawnInterval, next);
+	private scheduleNextObstacle(isInitial: boolean = false) {
+		if (isInitial) {
+			// Pour le premier spawn d'une zone, utiliser un délai réduit et variable
+			const reducedDelay = Phaser.Math.FloatBetween(0.0, 1);
+			this.nextObstacleTime = reducedDelay;
+		} else {
+			// génère une valeur dans [-obstacleSpawnVariance, +obstacleSpawnVariance]
+			const jitter = Phaser.Math.FloatBetween(
+				-this.obstacleSpawnVariance,
+				this.obstacleSpawnVariance
+			);
+			const next = this.obstacleSpawnInterval + jitter;
+			// clamp pour éviter des intervalles trop courts
+			this.nextObstacleTime = Math.max(this.minObstacleSpawnInterval, next);
+		}
 	}
 
 	// Accélération à chaque ESPACE / TAP
@@ -364,11 +329,6 @@ export class MainScene extends Phaser.Scene {
 		if (wasStopped && this.speed > 0) {
 			this.playStartTransition();
 		}
-		this.targetText.setText(
-			`Boost: +${Math.round(this.boostAmount)} | Vitesse: ${Math.round(
-				this.speed
-			)}`
-		);
 	}
 
 	update(_time: number, delta: number) {
@@ -427,17 +387,21 @@ export class MainScene extends Phaser.Scene {
 				this.steps = newSteps;
 				// clamp pour éviter d'afficher plus que l'objectif
 				const displaySteps = Math.min(this.steps, this.targetSteps);
-				this.stepsText.setText(`Pas: ${displaySteps} / ${this.targetSteps}`);
-				// mettre à jour la barre
+				this.stepsCountText.setText(String(displaySteps));
 				const ratio = Phaser.Math.Clamp(displaySteps / this.targetSteps, 0, 1);
-				this.progressBarFill.width = Math.round(this.progressBarWidth * ratio);
+				this.currentProgressRatio = ratio;
+				this.drawProgressArc(ratio);
 				// animer le texte pour attirer l'attention
 				this.tweens.add({
-					targets: this.stepsText,
+					targets: this.stepsCountText,
 					scale: 1.08,
 					duration: 140,
 					yoyo: true,
 				});
+
+				// Afficher des messages selon le nombre de pas
+				this.checkStepMilestones();
+
 				if (this.steps >= this.targetSteps) {
 					this.goalReached = true;
 					// feedback visuel : flash vert et message au centre
@@ -448,6 +412,7 @@ export class MainScene extends Phaser.Scene {
 							this.scale.height / 2,
 							'Objectif atteint\n10 000 pas',
 							{
+								fontFamily: this.uiFont,
 								fontSize: '28px',
 								color: '#ffffff',
 								backgroundColor: '#228822',
@@ -470,6 +435,8 @@ export class MainScene extends Phaser.Scene {
 		if (this.impactIndicator) {
 			this.impactIndicator.x -= scroll;
 			this.impactZoneX = this.impactIndicator.x;
+			// Mettre à jour l'indicateur du haut pour qu'il suive la zone d'impact
+			this.drawTopIndicator();
 		}
 
 		// ===== 3) GESTION DES OBSTACLES QUI TOMBENT =====
@@ -480,7 +447,7 @@ export class MainScene extends Phaser.Scene {
 			this.obstacleSpawnTimer = 0;
 
 			const obstacleScale = isMobile ? 0.7 : 1;
-			const obstacleSize = 40 * obstacleScale;
+			const obstacleSize = 80 * obstacleScale;
 
 			const spawnX = this.impactIndicator ? this.impactIndicator.x : width;
 			const newObs = this.createFallingObstacle(
@@ -516,13 +483,12 @@ export class MainScene extends Phaser.Scene {
 				}
 
 				if (collided) {
-					// collision -> flash selon la vitesse
+					// collision -> afficher message "Oups, prudence !"
 					if (this.speed > this.safeSpeedForObstacle) {
 						this.cameras.main.flash(150, 255, 0, 0);
-						this.runner.setTint(0xff0000);
+						this.showTutorialMessage('Oups, prudence !');
 					} else {
 						this.cameras.main.flash(150, 0, 255, 0);
-						this.runner.setTint(0x00ff00);
 					}
 
 					o.destroy();
@@ -555,34 +521,49 @@ export class MainScene extends Phaser.Scene {
 				this.impactIndicator.x = width + this.impactZoneWidth;
 				this.impactZoneX = this.impactIndicator.x;
 
-				// spawn immédiat d'un nouvel obstacle à droite
-				const obstacleScale = isMobile ? 0.7 : 1;
-				const obstacleSize = 40 * obstacleScale;
-				const newObs = this.createFallingObstacle(
-					this.impactIndicator.x + scroll,
-					-obstacleSize,
-					obstacleSize
-				);
-
-				this.fallingObstacles.push(newObs);
-				// réinitialiser le timer pour garder le rythme
+				// Réinitialiser le timer avec un délai variable pour éviter le timing prévisible
 				this.obstacleSpawnTimer = 0;
-				// et planifier un nouvel intervalle légèrement aléatoire
-				this.scheduleNextObstacle();
+				this.scheduleNextObstacle(true);
 			}
 		}
 
-		// ===== 4) DEBUG & JAUGE =====
+		// ===== 4) GESTION DES PLANTES AU SOL =====
 
-		const firstObsXText =
-			this.fallingObstacles.length > 0
-				? String(Math.round(this.fallingObstacles[0].x))
-				: 'none';
-		this.speedText.setText(
-			`Speed: ${Math.round(this.speed)} | ZoneX: ${Math.round(
-				this.impactZoneX
-			)} | ObX: ${firstObsXText}`
-		);
+		// Spawn de plantes aléatoires
+		this.bushSpawnTimer += dt;
+		if (this.bushSpawnTimer >= this.bushSpawnInterval) {
+			this.bushSpawnTimer = 0;
+
+			// Position aléatoire en hauteur (sur le sol ou légèrement au-dessus)
+			const bushY = height;
+			const bushX = width + 100; // apparaissent à droite de l'écran
+
+			const bushScale = this.isMobile ? 0.3 : 1;
+			const bush = this.add
+				.sprite(bushX, bushY, 'bush')
+				.setOrigin(0.5, 1)
+				.setScale(bushScale)
+				.setDepth(15);
+
+			this.bushes.push(bush);
+
+			// Varier l'intervalle de spawn
+			this.bushSpawnInterval = Phaser.Math.FloatBetween(1.5, 4.0);
+		}
+
+		// Mise à jour des plantes (défilement)
+		for (let i = this.bushes.length - 1; i >= 0; i--) {
+			const bush = this.bushes[i];
+			bush.x -= scroll * 1.2;
+
+			// Supprimer si hors écran à gauche
+			if (bush.x < -100) {
+				bush.destroy();
+				this.bushes.splice(i, 1);
+			}
+		}
+
+		// ===== 5) DEBUG & JAUGE =====
 
 		// JAUGE désactivée : mise à jour de l'aiguille commentée
 		/*
@@ -665,6 +646,266 @@ export class MainScene extends Phaser.Scene {
 		this.isWalkLoopPlaying = false;
 	}
 
+	private checkStepMilestones() {
+		let message = '';
+		let milestone = 0;
+
+		if (this.steps < 200 && this.lastMilestone < 200) {
+			message = 'Evites les bulles de distraction\nen t’arrêtant';
+			milestone = 200;
+		} else if (this.steps >= 500 && this.lastMilestone < 500) {
+			message = 'Continue comme ça ! 💪';
+			milestone = 500;
+		} else if (this.steps >= 1000 && this.lastMilestone < 1000) {
+			message = '1000 pas ! Tu assures !';
+			milestone = 1000;
+		} else if (this.steps >= 2500 && this.lastMilestone < 2500) {
+			message = "25% de l'objectif atteint ! 🎯";
+			milestone = 2500;
+		} else if (this.steps >= 5000 && this.lastMilestone < 5000) {
+			message = 'À mi-chemin ! Ne lâche rien ! 🔥';
+			milestone = 5000;
+		} else if (this.steps >= 7500 && this.lastMilestone < 7500) {
+			message = 'Plus que 2500 pas ! Courage ! 💯';
+			milestone = 7500;
+		} else if (this.steps >= 9000 && this.lastMilestone < 9000) {
+			message = 'Presque là ! Dernier effort ! 🚀';
+			milestone = 9000;
+		}
+
+		if (message) {
+			this.showTutorialMessage(message);
+			this.lastMilestone = milestone;
+		}
+	}
+
+	private showTutorialMessage(message: string) {
+		// Annuler l'ancien timer s'il existe
+		if (this.tutorialTimer) {
+			this.tutorialTimer.destroy();
+			this.tutorialTimer = undefined;
+		}
+
+		// Détruire l'ancien message s'il existe
+		if (this.tutorialText) {
+			this.tutorialText.destroy();
+		}
+
+		const { width, height } = this.scale;
+		const fontSize = this.isMobile ? '20px' : '24px';
+
+		this.tutorialText = this.add
+			.text(width / 2, height * 0.1, message, {
+				fontFamily: this.uiFont,
+				fontSize: fontSize,
+				color: '#6A225D',
+				padding: { x: 20, y: 12 },
+				align: 'center',
+			})
+			.setOrigin(0.5)
+			.setDepth(100)
+			.setAlpha(0);
+
+		// Animation d'apparition
+		this.tweens.add({
+			targets: this.tutorialText,
+			alpha: 1,
+			y: height * 0.2,
+			duration: 400,
+			ease: 'Back.easeOut',
+			onComplete: () => {
+				// Disparition après 3 secondes
+				this.tutorialTimer = this.time.delayedCall(3000, () => {
+					if (this.tutorialText) {
+						this.tweens.add({
+							targets: this.tutorialText,
+							alpha: 0,
+							duration: 300,
+							onComplete: () => {
+								if (this.tutorialText) {
+									this.tutorialText.destroy();
+									this.tutorialText = undefined;
+								}
+								this.tutorialTimer = undefined;
+							},
+						});
+					}
+				});
+			},
+		});
+	}
+
+	private drawTopIndicator() {
+		if (!this.topIndicator) return;
+		this.topIndicator.clear();
+
+		const indicatorWidth = this.impactZoneWidth;
+		const indicatorHeight = 8;
+		const topY = 0;
+
+		// Ligne rouge en haut de l'écran pour montrer où tombent les obstacles
+		this.topIndicator.fillStyle(0xff0000, 0.8);
+		this.topIndicator.fillRect(
+			this.impactZoneX - indicatorWidth / 2,
+			topY,
+			indicatorWidth,
+			indicatorHeight
+		);
+
+		// Petites flèches pointant vers le bas
+		const arrowSize = 12;
+		this.topIndicator.fillStyle(0xff0000, 0.8);
+
+		// Flèche gauche
+		this.topIndicator.fillTriangle(
+			this.impactZoneX - indicatorWidth / 2,
+			topY + indicatorHeight,
+			this.impactZoneX - indicatorWidth / 2 + arrowSize,
+			topY + indicatorHeight,
+			this.impactZoneX - indicatorWidth / 2 + arrowSize / 2,
+			topY + indicatorHeight + arrowSize
+		);
+
+		// Flèche droite
+		this.topIndicator.fillTriangle(
+			this.impactZoneX + indicatorWidth / 2 - arrowSize,
+			topY + indicatorHeight,
+			this.impactZoneX + indicatorWidth / 2,
+			topY + indicatorHeight,
+			this.impactZoneX + indicatorWidth / 2 - arrowSize / 2,
+			topY + indicatorHeight + arrowSize
+		);
+	}
+
+	private ensureUiFontLoaded() {
+		if (this.uiFontLoaded) {
+			this.applyUiFontToTexts();
+			return;
+		}
+		if (typeof document === 'undefined' || !(document as Document).fonts) {
+			this.uiFontLoaded = true;
+			this.applyUiFontToTexts();
+			return;
+		}
+		const fontSet = (document as Document).fonts;
+		// Charger toutes les tailles utilisées
+		const fontSizes = ['18px', '24px', '28px', '48px', '64px'];
+		const fontPromises = fontSizes.map((size) =>
+			fontSet.load(`${size} "${this.uiFont}"`).catch(() => {})
+		);
+
+		Promise.all(fontPromises)
+			.then(() => {
+				this.uiFontLoaded = true;
+				this.applyUiFontToTexts();
+			})
+			.catch(() => {
+				this.applyUiFontToTexts();
+			});
+	}
+
+	private applyUiFontToTexts() {
+		if (this.impactIndicator) {
+			this.impactIndicator.setStyle({ fontFamily: this.uiFont });
+		}
+		if (this.stepsCountText) {
+			this.stepsCountText.setStyle({ fontFamily: this.uiFont });
+		}
+		if (this.stepsGoalText) {
+			this.stepsGoalText.setStyle({ fontFamily: this.uiFont });
+		}
+		if (this.tutorialText) {
+			this.tutorialText.setStyle({ fontFamily: this.uiFont });
+		}
+	}
+
+	private layoutProgressUi(width: number) {
+		if (!this.progressCircleBg || !this.progressCircleFill) return;
+		const desktopRadius = 100;
+		this.progressCircleCenterX = this.isMobile ? width / 2 : width - 120;
+		this.progressCircleCenterY = this.isMobile ? 150 : 120;
+		this.progressCircleRadius = this.isMobile ? 110 : desktopRadius;
+		this.drawProgressBackground();
+		this.drawProgressArc(this.currentProgressRatio);
+		const topOffset = this.isMobile ? 40 : 40;
+		const goalOffset = this.isMobile ? 30 : 18;
+		const heartsOffset = this.isMobile ? 35 : 35;
+		this.stepsIcon?.setPosition(
+			this.progressCircleCenterX,
+			this.progressCircleCenterY - this.progressCircleRadius + topOffset
+		);
+		this.stepsCountText?.setPosition(
+			this.progressCircleCenterX,
+			this.progressCircleCenterY - (this.isMobile ? 8 : 4)
+		);
+		this.stepsGoalText?.setPosition(
+			this.progressCircleCenterX,
+			this.progressCircleCenterY + goalOffset
+		);
+		const heartsSpacing = this.isMobile ? 60 : 30;
+		const heartRowY =
+			this.progressCircleCenterY + this.progressCircleRadius - heartsOffset;
+		const totalWidth = heartsSpacing * (this.heartsIcons.length - 1);
+		const startX = this.progressCircleCenterX - totalWidth / 2;
+		const heartSize = this.isMobile ? 60 : 25;
+		this.heartsIcons.forEach((heart, index) => {
+			heart.setDisplaySize(heartSize, heartSize);
+			heart.setPosition(startX + heartsSpacing * index, heartRowY);
+		});
+	}
+
+	private drawProgressBackground() {
+		if (!this.progressCircleBg) return;
+		const strokeWidth = this.isMobile ? 12 : 8;
+		const innerRadius = Math.max(
+			this.progressCircleRadius - (this.isMobile ? 14 : 10),
+			10
+		);
+
+		// Fond blanc semi-transparent avec flou (appliqué via postFX sur le container)
+		this.progressCircleBg.clear();
+		this.progressCircleBg.fillStyle(0xffffff, 0.7);
+		this.progressCircleBg.fillCircle(
+			this.progressCircleCenterX,
+			this.progressCircleCenterY,
+			innerRadius
+		);
+
+		// Contour noir (non flouté)
+		if (this.progressCircleStroke) {
+			this.progressCircleStroke.clear();
+			this.progressCircleStroke.lineStyle(strokeWidth, 0x1f1f1f, 1);
+			this.progressCircleStroke.strokeCircle(
+				this.progressCircleCenterX,
+				this.progressCircleCenterY,
+				this.progressCircleRadius
+			);
+		}
+	}
+
+	private drawProgressArc(ratio: number) {
+		if (!this.progressCircleFill) return;
+		this.progressCircleFill.clear();
+		const clampedRatio = Phaser.Math.Clamp(ratio, 0, 1);
+		if (clampedRatio <= 0) {
+			return;
+		}
+		const strokeWidth = this.isMobile ? 12 : 8;
+		const startAngle = Phaser.Math.DegToRad(-90);
+		const endAngle = startAngle + Phaser.Math.PI2 * clampedRatio;
+		this.progressCircleFill.lineStyle(strokeWidth, 0xffd24d, 1);
+		this.progressCircleFill.beginPath();
+		this.progressCircleFill.arc(
+			this.progressCircleCenterX,
+			this.progressCircleCenterY,
+			this.progressCircleRadius,
+			startAngle,
+			endAngle,
+			false
+		);
+		this.progressCircleFill.strokePath();
+	}
+
 	private handleResize(gameSize: Phaser.Structs.Size) {
 		const { width, height } = gameSize;
 		if (this.bg) {
@@ -694,6 +935,7 @@ export class MainScene extends Phaser.Scene {
 			}
 			this.impactGroundY = runnerY;
 		}
+		this.layoutProgressUi(width);
 	}
 
 	private fitBackgroundToHeight(width: number, height: number) {
