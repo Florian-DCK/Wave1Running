@@ -18,6 +18,7 @@ export class MainScene extends Phaser.Scene {
 	private ground!: Phaser.GameObjects.TileSprite;
 	private houses!: Phaser.GameObjects.TileSprite;
 	private housesHeight = 300; // hauteur par défaut pour phase 1
+	private housesScale = 1; // scale par défaut
 	private runner!: Phaser.GameObjects.Sprite;
 	private runnerHitbox!: Phaser.GameObjects.Rectangle;
 	private spaceKey!: Phaser.Input.Keyboard.Key;
@@ -38,7 +39,7 @@ export class MainScene extends Phaser.Scene {
 	private transitionFrameKeys: string[] = [];
 	private walkFrameKeys: string[] = [];
 	private transitionAnimationKey = 'idle_to_run';
-	private walkAnimationKey = 'loop run';
+	private walkAnimationKey = 'marche loop';
 	private isTransitionPlaying = false;
 	private isWalkLoopPlaying = false;
 	private idleTextureKey = 'character_idle';
@@ -60,6 +61,8 @@ export class MainScene extends Phaser.Scene {
 	private isTransitioning = false;
 	private fadeOverlay?: Phaser.GameObjects.Graphics;
 	private phaseThresholds = [0.25, 0.5, 0.75]; // 25%, 50%, 75%
+	private tempHouses?: Phaser.GameObjects.TileSprite;
+	private tempGround?: Phaser.GameObjects.TileSprite;
 
 	// --- Messages de progression ---
 	private tutorialText?: Phaser.GameObjects.Text;
@@ -142,14 +145,14 @@ export class MainScene extends Phaser.Scene {
 				`/assets/animations/Arret+Marche/Arret+Marche_${frameId}.png`
 			);
 		}
-		const walkFrames = 19;
+		const walkFrames = 33;
 		for (let i = 1; i <= walkFrames; i++) {
 			const frameId = i.toString().padStart(5, '0');
 			const key = `walk_${frameId}`;
 			this.walkFrameKeys.push(key);
 			this.load.image(
 				key,
-				`/assets/animations/marche loop/loop run_${frameId}.png`
+				`/assets/animations/marche loop/marche loop_${frameId}.png`
 			);
 		}
 		this.load.image('steps_icon', '/assets/Steps.png');
@@ -186,14 +189,14 @@ export class MainScene extends Phaser.Scene {
 		this.extraDecayRampDuration = this.isMobile ? 1.0 : 1.5;
 		this.extraDecayMaxMultiplier = this.isMobile ? 1.4 : 2.5;
 		this.stepMultiplier = this.isMobile ? 10 : 5;
-		this.runnerScale = this.isMobile ? 0.4 : 0.4;
+		this.runnerScale = this.isMobile ? 0.2 : 0.4;
 		this.speed = 400;
 
 		// ====== BACKGROUND SCROLLABLE ======
 
 		this.bg = this.add.tileSprite(0, 0, width, height, 'bg').setOrigin(0, 0);
 		this.fitBackgroundToHeight(width, height);
-		const groundHeight = 270;
+		const groundHeight = 200;
 		this.houses = this.add
 			.tileSprite(
 				0,
@@ -216,7 +219,7 @@ export class MainScene extends Phaser.Scene {
 
 		// ===== RUNNER =====
 		const runnerX = this.isMobile ? width * 0.18 : width * 0.22;
-		const runnerY = height * 0.9;
+		const runnerY = height * 0.95;
 		this.runner = this.add
 			.sprite(runnerX, runnerY, this.idleTextureKey)
 			.setOrigin(0.5, 1)
@@ -422,6 +425,13 @@ export class MainScene extends Phaser.Scene {
 		if (this.ground) {
 			this.ground.tilePositionX += scroll;
 		}
+		// Déplacer aussi les TileSprites temporaires pendant le cross-fade
+		if (this.tempHouses) {
+			this.tempHouses.tilePositionX += scroll;
+		}
+		if (this.tempGround) {
+			this.tempGround.tilePositionX += scroll;
+		}
 
 		// Mise à jour du compteur de pas en fonction de la distance parcourue
 		if (!this.goalReached) {
@@ -457,12 +467,18 @@ export class MainScene extends Phaser.Scene {
 
 						// Si on vient de dépasser ce seuil et qu'on n'est pas déjà à cette phase
 						if (ratio >= threshold && this.currentPhase < nextPhase) {
+							console.log(
+								`🎯 Déclenchement transition: ratio=${ratio.toFixed(
+									3
+								)}, threshold=${threshold}, currentPhase=${
+									this.currentPhase
+								}, nextPhase=${nextPhase}`
+							);
 							this.transitionToPhase(nextPhase);
 							break;
 						}
 					}
 				}
-
 				if (this.steps >= this.targetSteps) {
 					this.goalReached = true;
 					// feedback visuel : flash vert et message au centre
@@ -627,22 +643,6 @@ export class MainScene extends Phaser.Scene {
 				this.bushes.splice(i, 1);
 			}
 		}
-
-		// ===== 5) DEBUG & JAUGE =====
-
-		// JAUGE désactivée : mise à jour de l'aiguille commentée
-		/*
-        const speedRatio = this.runSpeed > 0
-            ? Phaser.Math.Clamp(this.speed / this.runSpeed, 0, 1)
-            : 0;
-
-        const speedAngleDeg = Phaser.Math.Linear(
-            this.minGaugeAngleDeg,
-            this.maxGaugeAngleDeg,
-            speedRatio
-        );
-        this.gaugeNeedle.setRotation(Phaser.Math.DegToRad(speedAngleDeg));
-        */
 	}
 
 	private createRunnerAnimations() {
@@ -819,64 +819,105 @@ export class MainScene extends Phaser.Scene {
 			return;
 		}
 
-		console.log('✅ fadeOverlay existe, alpha actuel:', this.fadeOverlay.alpha);
+		console.log('✅ Cross-fade démarré');
 
-		// Fondu blanc entrant (fade in)
+		// Déterminer la hauteur selon la phase
+		let newHousesHeight;
+		let newHousesScale = 1;
+		const { width, height } = this.scale;
+		const groundHeight = 200;
+
+		if (phaseNumber === 1 || phaseNumber === 4) {
+			newHousesHeight = 300; // Phase 1 et 4: maison
+		} else if (phaseNumber === 2) {
+			const originalBuldingHeight = 760;
+			const targetHeight = height - groundHeight;
+			newHousesHeight = originalBuldingHeight;
+			newHousesScale = targetHeight / originalBuldingHeight;
+		} else {
+			const originalOfficeHeight = 768;
+			const targetHeight = height - groundHeight;
+			newHousesHeight = originalOfficeHeight;
+			newHousesScale = targetHeight / originalOfficeHeight;
+		}
+
+		const scaledHeight = newHousesHeight * newHousesScale;
+
+		// Créer les nouveaux TileSprites pour la nouvelle phase (en dessous des anciens)
+		this.tempGround = this.add
+			.tileSprite(
+				0,
+				height - groundHeight,
+				width,
+				groundHeight,
+				`ground_phase${phaseNumber}`
+			)
+			.setOrigin(0, 0)
+			.setDepth(0)
+			.setAlpha(0);
+
+		this.tempHouses = this.add
+			.tileSprite(
+				0,
+				height - groundHeight - scaledHeight,
+				width,
+				scaledHeight,
+				`houses_phase${phaseNumber}`
+			)
+			.setOrigin(0, 0)
+			.setDepth(0)
+			.setTileScale(newHousesScale, newHousesScale)
+			.setAlpha(0);
+
+		// Copier la position de scroll des anciens TileSprites
+		if (this.ground) {
+			this.tempGround.tilePositionX = this.ground.tilePositionX;
+		}
+		if (this.houses) {
+			this.tempHouses.tilePositionX = this.houses.tilePositionX;
+		}
+
+		// Cross-fade: ancien fade out, nouveau fade in
+		const crossFadeDuration = 1000;
+
 		this.tweens.add({
-			targets: this.fadeOverlay,
-			alpha: 1,
-			duration: 500,
-			ease: 'Cubic.easeIn',
-			onStart: () => {
-				console.log('▶️ Tween fade IN démarré');
-			},
-			onUpdate: (tween) => {
-				if (tween.progress === 0.5) {
-					console.log('⏱️ Tween à 50%, alpha:', this.fadeOverlay?.alpha);
-				}
-			},
-			onComplete: () => {
-				console.log('⚪ Écran BLANC, changement de phase');
-				// Changer les textures pendant que l'écran est blanc
-				this.currentPhase = newPhase;
+			targets: [this.ground, this.houses],
+			alpha: 0,
+			duration: crossFadeDuration,
+			ease: 'Sine.easeInOut',
+		});
 
-				// Déterminer la hauteur selon la phase
-				let newHousesHeight;
-				if (phaseNumber === 1 || phaseNumber === 4) {
-					newHousesHeight = 300; // Phase 1 et 4: maison
-				} else if (phaseNumber === 2) {
-					newHousesHeight = 763; // Phase 2: bulding
-				} else {
-					newHousesHeight = 768; // Phase 3: office
-				}
-				this.housesHeight = newHousesHeight;
+		this.tweens.add({
+			targets: [this.tempGround, this.tempHouses],
+			alpha: 1,
+			duration: crossFadeDuration,
+			ease: 'Sine.easeInOut',
+			onComplete: () => {
+				console.log('🏁 Cross-fade TERMINÉE');
+
+				// Remplacer les anciens TileSprites par les nouveaux
 				if (this.ground) {
-					this.ground.setTexture(`ground_phase${phaseNumber}`);
+					this.ground.destroy();
 				}
 				if (this.houses) {
-					const { height } = this.scale;
-					const groundHeight = 270;
-					this.houses.setTexture(`houses_phase${phaseNumber}`);
-					this.houses.setSize(this.houses.width, newHousesHeight);
-					this.houses.setPosition(0, height - groundHeight - newHousesHeight);
-				} // Détruire les anciennes plantes et en créer de nouvelles avec la bonne texture
+					this.houses.destroy();
+				}
+
+				this.ground = this.tempGround!;
+				this.houses = this.tempHouses!;
+				this.tempGround = undefined;
+				this.tempHouses = undefined;
+
+				// Mettre à jour les propriétés
+				this.currentPhase = newPhase;
+				this.housesHeight = newHousesHeight;
+				this.housesScale = newHousesScale;
+
+				// Détruire les anciennes plantes
 				this.bushes.forEach((bush) => bush.destroy());
 				this.bushes = [];
 
-				// Fondu blanc sortant (fade out)
-				this.tweens.add({
-					targets: this.fadeOverlay,
-					alpha: 0,
-					duration: 500,
-					ease: 'Cubic.easeOut',
-					onStart: () => {
-						console.log('▶️ Tween fade OUT démarré');
-					},
-					onComplete: () => {
-						console.log('🏁 Transition TERMINÉE');
-						this.isTransitioning = false;
-					},
-				});
+				this.isTransitioning = false;
 			},
 		});
 	}
@@ -970,11 +1011,11 @@ export class MainScene extends Phaser.Scene {
 		const desktopRadius = 100;
 		this.progressCircleCenterX = this.isMobile ? width / 2 : width - 120;
 		this.progressCircleCenterY = this.isMobile ? 150 : 120;
-		this.progressCircleRadius = this.isMobile ? 110 : desktopRadius;
+		this.progressCircleRadius = this.isMobile ? 90 : desktopRadius;
 		this.drawProgressBackground();
 		this.drawProgressArc(this.currentProgressRatio);
 		const topOffset = this.isMobile ? 40 : 40;
-		const goalOffset = this.isMobile ? 30 : 18;
+		const goalOffset = this.isMobile ? 18 : 18;
 		const heartsOffset = this.isMobile ? 35 : 35;
 		this.stepsIcon?.setPosition(
 			this.progressCircleCenterX,
@@ -982,18 +1023,18 @@ export class MainScene extends Phaser.Scene {
 		);
 		this.stepsCountText?.setPosition(
 			this.progressCircleCenterX,
-			this.progressCircleCenterY - (this.isMobile ? 8 : 4)
+			this.progressCircleCenterY - (this.isMobile ? 4 : 4)
 		);
 		this.stepsGoalText?.setPosition(
 			this.progressCircleCenterX,
 			this.progressCircleCenterY + goalOffset
 		);
-		const heartsSpacing = this.isMobile ? 60 : 30;
+		const heartsSpacing = this.isMobile ? 30 : 30;
 		const heartRowY =
 			this.progressCircleCenterY + this.progressCircleRadius - heartsOffset;
 		const totalWidth = heartsSpacing * (this.heartsIcons.length - 1);
 		const startX = this.progressCircleCenterX - totalWidth / 2;
-		const heartSize = this.isMobile ? 60 : 25;
+		const heartSize = this.isMobile ? 25 : 25;
 		this.heartsIcons.forEach((heart, index) => {
 			heart.setDisplaySize(heartSize, heartSize);
 			heart.setPosition(startX + heartsSpacing * index, heartRowY);
@@ -1059,7 +1100,7 @@ export class MainScene extends Phaser.Scene {
 			this.bg.setTilePosition(0, 0);
 			this.fitBackgroundToHeight(width, height);
 		}
-		const groundHeight = 270;
+		const groundHeight = 200;
 		if (this.houses) {
 			this.houses.setSize(width, this.housesHeight);
 			this.houses.setPosition(0, height - groundHeight - this.housesHeight);
@@ -1070,7 +1111,7 @@ export class MainScene extends Phaser.Scene {
 		}
 		if (this.runner) {
 			const runnerX = this.isMobile ? width * 0.18 : width * 0.22;
-			const runnerY = height * 0.9;
+			const runnerY = height * 0.95;
 			this.runner.setPosition(runnerX, runnerY);
 			this.runner.setScale(this.runnerScale);
 			if (this.runnerHitbox) {
