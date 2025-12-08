@@ -27,6 +27,8 @@ export class MainScene extends Phaser.Scene {
 	private walkAnimationKey = 'walk_loop';
 	private isWalkLoopPlaying = false;
 	private idleTextureKey = 'character_idle';
+	private runnerScaleNear = 0.3;
+	private runnerScaleFar = 0.26;
 
 	// Progress UI
 	private progressBarBg!: Phaser.GameObjects.Rectangle;
@@ -48,11 +50,14 @@ export class MainScene extends Phaser.Scene {
 	private laneSwitchDuration = 120;
 
 	// --- Obstacles qui arrivent de la droite sur une ligne ---
-	private obstacles: Phaser.GameObjects.Rectangle[] = [];
+	private obstacles: Array<
+		Phaser.GameObjects.Rectangle | Phaser.GameObjects.Sprite
+	> = [];
 	private obstacleSpawnInterval = 1.2; // secondes
 	private obstacleSpawnTimer = 0;
 	private obstacleSpeed = 650; // px/s
 	private swipeStartY: number | null = null;
+	private obstacleTextureKeys: string[] = [];
 
 	constructor() {
 		super('MainScene');
@@ -61,6 +66,7 @@ export class MainScene extends Phaser.Scene {
 	preload() {
 		this.transitionFrameKeys = [];
 		this.walkFrameKeys = [];
+		this.obstacleTextureKeys = [];
 		this.load.image('bg', '/assets/ciel.png');
 		this.load.image('ground', '/assets/sol.png');
 		this.load.image('houses', '/assets/maison.png');
@@ -90,17 +96,32 @@ export class MainScene extends Phaser.Scene {
 		} else if (this.walkFrameKeys.length > 0) {
 			this.idleTextureKey = this.walkFrameKeys[0];
 		}
+		const obstacleFiles = [
+			'bulle collegue question.png',
+			'bulle croissant.png',
+			'bulle popcorn.png',
+			'bulle taxi.png',
+			'bulles mails.png',
+			'bulles manettes.png',
+		];
+		obstacleFiles.forEach((file, index) => {
+			const key = `obstacle_${index}`;
+			this.obstacleTextureKeys.push(key);
+			this.load.image(key, `/assets/obstacles/${file}`);
+		});
 	}
 
 	create() {
 		const { width, height } = this.scale;
 		this.isMobile = !this.sys.game.device.os.desktop;
 
-		this.maxSpeed = this.isMobile ? 400 : 900;
-		this.boostAmount = this.isMobile ? 180 : 260;
-		this.decayPerSecond = this.isMobile ? 360 : 480;
+		this.maxSpeed = this.isMobile ? 400 : 600;
+		this.boostAmount = this.isMobile ? 180 : 200;
+		this.decayPerSecond = this.isMobile ? 360 : 400;
 		this.obstacleSpeed = this.isMobile ? 520 : 700;
 		this.stepMultiplier = this.isMobile ? 8 : 5;
+		this.runnerScaleNear = this.isMobile ? 0.35 : 0.3;
+		this.runnerScaleFar = this.runnerScaleNear * 0.85;
 		this.speed = 0;
 
 		// Lignes horizontales (haut / bas)
@@ -118,13 +139,13 @@ export class MainScene extends Phaser.Scene {
 		this.scale.on('resize', this.handleResize, this);
 
 		// ===== RUNNER =====
-		const runnerScale = this.isMobile ? 0.3 : 0.3;
 		const runnerX = width * 0.2;
 
 		this.runner = this.add
 			.sprite(runnerX, this.lanesY[this.currentLaneIndex], this.idleTextureKey)
 			.setOrigin(0.5, 1)
-			.setScale(runnerScale);
+			.setScale(this.getRunnerScaleForLane(this.currentLaneIndex))
+			.setDepth(20);
 		this.createRunnerAnimations();
 		const hitboxWidth = this.runner.displayWidth * 0.1;
 		const hitboxHeight = this.runner.displayHeight * 0.7;
@@ -138,7 +159,7 @@ export class MainScene extends Phaser.Scene {
 				0.2
 			)
 			.setOrigin(0.5, 1.15)
-			.setVisible(true);
+			.setVisible(false);
 
 		// ===== UI =====
 		this.speedText = this.add.text(10, 10, 'Vitesse: 0', {
@@ -238,10 +259,13 @@ export class MainScene extends Phaser.Scene {
 			);
 		}
 		const targetY = this.lanesY[this.currentLaneIndex];
+		const targetScale = this.getRunnerScaleForLane(this.currentLaneIndex);
 
 		this.tweens.add({
 			targets: this.runner,
 			y: targetY,
+			scaleX: targetScale,
+			scaleY: targetScale,
 			duration: this.laneSwitchDuration,
 			ease: 'Sine.easeOut',
 		});
@@ -253,9 +277,25 @@ export class MainScene extends Phaser.Scene {
 		const y = this.lanesY[laneIndex];
 		const x = this.scale.width + size;
 
-		const obs = this.add
-			.rectangle(x, y, size, size, 0xffaa00)
-			.setOrigin(0.5, 1);
+		let obs: Phaser.GameObjects.Rectangle | Phaser.GameObjects.Sprite;
+		if (this.obstacleTextureKeys.length > 0) {
+			const textureKey = Phaser.Utils.Array.GetRandom(this.obstacleTextureKeys);
+			const sprite = this.add
+				.sprite(x, y, textureKey)
+				.setOrigin(0.5, 1)
+				.setDepth(10);
+			let displaySize = this.isMobile ? size : size * 1.2;
+			if (laneIndex === 0) {
+				displaySize *= 0.85;
+			}
+			sprite.setDisplaySize(displaySize, displaySize);
+			obs = sprite;
+		} else {
+			obs = this.add
+				.rectangle(x, y, size, size, 0xffaa00)
+				.setOrigin(0.5, 1)
+				.setDepth(10);
+		}
 		obs.setData('laneIndex', laneIndex);
 
 		this.obstacles.push(obs);
@@ -360,6 +400,7 @@ export class MainScene extends Phaser.Scene {
 		this.lanesY = [height * 0.58, height * 0.8];
 		if (this.runner) {
 			this.runner.y = this.lanesY[this.currentLaneIndex];
+			this.runner.setScale(this.getRunnerScaleForLane(this.currentLaneIndex));
 			if (this.runnerHitbox) {
 				this.runnerHitbox.x = this.runner.x;
 				this.runnerHitbox.y = this.runner.y;
@@ -407,6 +448,10 @@ export class MainScene extends Phaser.Scene {
 		this.anims.create({ key, frames, frameRate, repeat });
 	}
 
+	private getRunnerScaleForLane(laneIndex: number) {
+		return laneIndex === 0 ? this.runnerScaleFar : this.runnerScaleNear;
+	}
+
 	update(_time: number, delta: number) {
 		const dt = delta / 1000;
 		const { width, height } = this.scale;
@@ -417,6 +462,10 @@ export class MainScene extends Phaser.Scene {
 		if (this.runnerHitbox) {
 			this.runnerHitbox.x = this.runner.x;
 			this.runnerHitbox.y = this.runner.y;
+			this.runnerHitbox.setDisplaySize(
+				this.runner.displayWidth * 0.1,
+				this.runner.displayHeight * 0.7
+			);
 		}
 
 		// ===== INPUT LANE (flèches / swipe) =====
