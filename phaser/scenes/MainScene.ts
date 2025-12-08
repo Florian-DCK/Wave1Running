@@ -12,13 +12,21 @@ export class MainScene extends Phaser.Scene {
 	// --- BG & objets principaux ---
 	private bg!: Phaser.GameObjects.TileSprite;
 	private ground!: Phaser.GameObjects.TileSprite;
-	private runner!: Phaser.GameObjects.Rectangle;
-	private bounceTween!: Phaser.Tweens.Tween;
+	private houses!: Phaser.GameObjects.TileSprite;
+	private runner!: Phaser.GameObjects.Sprite;
+	private runnerHitbox!: Phaser.GameObjects.Rectangle;
 	private speedText!: Phaser.GameObjects.Text;
 	private infoText!: Phaser.GameObjects.Text;
 	private spaceKey!: Phaser.Input.Keyboard.Key;
 	private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
 	private stepsText!: Phaser.GameObjects.Text;
+	private transitionFrameKeys: string[] = [];
+	private transitionAnimationKey = 'idle_to_run';
+	private isTransitionPlaying = false;
+	private walkFrameKeys: string[] = [];
+	private walkAnimationKey = 'walk_loop';
+	private isWalkLoopPlaying = false;
+	private idleTextureKey = 'character_idle';
 
 	// Progress UI
 	private progressBarBg!: Phaser.GameObjects.Rectangle;
@@ -51,8 +59,37 @@ export class MainScene extends Phaser.Scene {
 	}
 
 	preload() {
+		this.transitionFrameKeys = [];
+		this.walkFrameKeys = [];
 		this.load.image('bg', '/assets/ciel.png');
 		this.load.image('ground', '/assets/sol.png');
+		this.load.image('houses', '/assets/maison.png');
+		this.load.image('character_idle', '/assets/character_idle.png');
+		const transitionFrames = 27;
+		for (let i = 0; i < transitionFrames; i++) {
+			const frameId = i.toString().padStart(5, '0');
+			const key = `transition_${frameId}`;
+			this.transitionFrameKeys.push(key);
+			this.load.image(
+				key,
+				`/assets/animations/Arret+Marche/Arret+Marche_${frameId}.png`
+			);
+		}
+		const walkFrames = 34;
+		for (let i = 0; i < walkFrames; i++) {
+			const frameId = i.toString().padStart(5, '0');
+			const key = `walk_${frameId}`;
+			this.walkFrameKeys.push(key);
+			this.load.image(
+				key,
+				`/assets/animations/marche loop/marche loop_${frameId}.png`
+			);
+		}
+		if (this.transitionFrameKeys.length > 0) {
+			this.idleTextureKey = this.transitionFrameKeys[0];
+		} else if (this.walkFrameKeys.length > 0) {
+			this.idleTextureKey = this.walkFrameKeys[0];
+		}
 	}
 
 	create() {
@@ -67,52 +104,41 @@ export class MainScene extends Phaser.Scene {
 		this.speed = 0;
 
 		// Lignes horizontales (haut / bas)
-		this.lanesY = [height * 0.58, height * 0.8];
+		this.lanesY = [height * 0.75, height * 0.95];
 
 		// ====== BACKGROUND SCROLLABLE ======
-		const groundTop = this.lanesY[1];
 		this.bg = this.add.tileSprite(0, 0, width, height, 'bg').setOrigin(0, 0);
-		const bgTex = this.textures.get('bg').getSourceImage();
-		if (bgTex && bgTex.height > 0) {
-			// Force une seule tuile en Y en étirant le visuel sur toute la hauteur.
-			const scaleY = height / bgTex.height;
-			this.bg.setTileScale(1, scaleY);
-		}
+		this.fitBackgroundToHeight(width, height);
+		this.houses = this.add
+			.tileSprite(0, height - 570, width, 300, 'houses')
+			.setOrigin(0, 0);
 		this.ground = this.add
-			.rectangle(
-				width / 2,
-				groundTop + groundHeight / 2,
-				width,
-				groundHeight,
-				0x0c0c0c
-			)
-			.setOrigin(0.5, 0.5);
+			.tileSprite(0, height - 270, width, 270, 'ground')
+			.setOrigin(0, 0);
+		this.scale.on('resize', this.handleResize, this);
 
 		// ===== RUNNER =====
-		const runnerScale = this.isMobile ? 0.8 : 1;
-		const runnerWidth = 44 * runnerScale;
-		const runnerHeight = 86 * runnerScale;
+		const runnerScale = this.isMobile ? 0.3 : 0.3;
 		const runnerX = width * 0.2;
 
 		this.runner = this.add
+			.sprite(runnerX, this.lanesY[this.currentLaneIndex], this.idleTextureKey)
+			.setOrigin(0.5, 1)
+			.setScale(runnerScale);
+		this.createRunnerAnimations();
+		const hitboxWidth = this.runner.displayWidth * 0.1;
+		const hitboxHeight = this.runner.displayHeight * 0.7;
+		this.runnerHitbox = this.add
 			.rectangle(
 				runnerX,
 				this.lanesY[this.currentLaneIndex],
-				runnerWidth,
-				runnerHeight,
-				0x00ff66
+				hitboxWidth,
+				hitboxHeight,
+				0xff0000,
+				0.2
 			)
-			.setOrigin(0.5, 1);
-
-		// petit rebond idle (stocké pour pouvoir le recréer après un switch de ligne)
-		this.bounceTween = this.tweens.add({
-			targets: this.runner,
-			y: this.runner.y - 12,
-			duration: 320,
-			yoyo: true,
-			repeat: -1,
-			ease: 'Sine.easeInOut',
-		});
+			.setOrigin(0.5, 1.15)
+			.setVisible(true);
 
 		// ===== UI =====
 		this.speedText = this.add.text(10, 10, 'Vitesse: 0', {
@@ -213,26 +239,11 @@ export class MainScene extends Phaser.Scene {
 		}
 		const targetY = this.lanesY[this.currentLaneIndex];
 
-		// stop/recrée le rebond pour éviter de revenir sur l'ancienne ligne
-		if (this.bounceTween) {
-			this.bounceTween.stop();
-		}
-
 		this.tweens.add({
 			targets: this.runner,
 			y: targetY,
 			duration: this.laneSwitchDuration,
 			ease: 'Sine.easeOut',
-			onComplete: () => {
-				this.bounceTween = this.tweens.add({
-					targets: this.runner,
-					y: targetY - 12,
-					duration: 320,
-					yoyo: true,
-					repeat: -1,
-					ease: 'Sine.easeInOut',
-				});
-			},
 		});
 	}
 
@@ -245,13 +256,18 @@ export class MainScene extends Phaser.Scene {
 		const obs = this.add
 			.rectangle(x, y, size, size, 0xffaa00)
 			.setOrigin(0.5, 1);
+		obs.setData('laneIndex', laneIndex);
 
 		this.obstacles.push(obs);
 	}
 
 	private boost() {
 		if (this.gameOver) return;
+		const wasStopped = this.speed <= 1;
 		this.speed = Math.min(this.speed + this.boostAmount, this.maxSpeed);
+		if (wasStopped && this.speed > 0) {
+			this.playStartTransition();
+		}
 		this.infoText.setText(
 			`Boost: +${Math.round(this.boostAmount)} | Vitesse: ${Math.round(
 				this.speed
@@ -259,13 +275,53 @@ export class MainScene extends Phaser.Scene {
 		);
 	}
 
+	private playStartTransition() {
+		if (this.isTransitionPlaying) return;
+		if (!this.anims.exists(this.transitionAnimationKey)) {
+			this.playWalkLoop();
+			return;
+		}
+		if (this.isWalkLoopPlaying && this.runner.anims) {
+			this.runner.anims.stop();
+			this.isWalkLoopPlaying = false;
+		}
+		this.isTransitionPlaying = true;
+		this.runner.play(this.transitionAnimationKey);
+		this.runner.once(
+			Phaser.Animations.Events.ANIMATION_COMPLETE_KEY +
+				this.transitionAnimationKey,
+			() => {
+				this.isTransitionPlaying = false;
+				this.playWalkLoop();
+			}
+		);
+	}
+
+	private playWalkLoop() {
+		if (this.isWalkLoopPlaying) return;
+		if (!this.anims.exists(this.walkAnimationKey)) return;
+		this.runner.play(this.walkAnimationKey);
+		this.isWalkLoopPlaying = true;
+	}
+
+	private stopWalkLoop() {
+		if (!this.isWalkLoopPlaying) return;
+		if (this.runner.anims) {
+			this.runner.anims.stop();
+		}
+		this.runner.setTexture(this.idleTextureKey);
+		this.isWalkLoopPlaying = false;
+	}
+
 	private handleCrash() {
 		if (this.gameOver) return;
 		this.gameOver = true;
-		this.runner.setFillStyle(0xff4444);
+		this.isTransitionPlaying = false;
+		this.stopWalkLoop();
+		this.runner.setTint(0xff4444);
 		this.cameras.main.flash(200, 255, 0, 0);
 
-		const msg = this.add
+		this.add
 			.text(
 				this.scale.width / 2,
 				this.scale.height / 2,
@@ -286,12 +342,81 @@ export class MainScene extends Phaser.Scene {
 		}
 	}
 
+	private handleResize(gameSize: Phaser.Structs.Size) {
+		const { width, height } = gameSize;
+
+		// keep the background and ground filling the full viewport height
+		if (this.bg) {
+			this.bg.setSize(width, height);
+			this.bg.setTilePosition(0, 0);
+			this.fitBackgroundToHeight(width, height);
+		}
+		if (this.ground) {
+			this.ground.setSize(width, 100);
+			this.ground.setPosition(0, height - 100);
+		}
+
+		// recalculate lanes and runner Y to stay aligned with the new height
+		this.lanesY = [height * 0.58, height * 0.8];
+		if (this.runner) {
+			this.runner.y = this.lanesY[this.currentLaneIndex];
+			if (this.runnerHitbox) {
+				this.runnerHitbox.x = this.runner.x;
+				this.runnerHitbox.y = this.runner.y;
+			}
+		}
+	}
+
+	private fitBackgroundToHeight(width: number, height: number) {
+		const texture = this.textures.get('bg');
+		const source = texture.getSourceImage() as HTMLImageElement | undefined;
+		// some Phaser builds expose getFrame on the manager, not the texture instance
+		const frame = this.textures.getFrame('bg');
+		const frameHeight = source?.height ?? frame?.height;
+		if (!frameHeight || frameHeight === 0) return;
+
+		// uniform scale: keep aspect ratio, fit height, let X repeat naturally
+		const scale = height / frameHeight;
+		this.bg.setTileScale(scale, scale);
+	}
+
+	private createRunnerAnimations() {
+		this.createAnimationFromKeys(
+			this.transitionAnimationKey,
+			this.transitionFrameKeys,
+			20,
+			0
+		);
+		this.createAnimationFromKeys(
+			this.walkAnimationKey,
+			this.walkFrameKeys,
+			24,
+			-1
+		);
+	}
+
+	private createAnimationFromKeys(
+		key: string,
+		frameKeys: string[],
+		frameRate: number,
+		repeat: number
+	) {
+		if (frameKeys.length === 0) return;
+		if (this.anims.exists(key)) return;
+		const frames = frameKeys.map((frameKey) => ({ key: frameKey }));
+		this.anims.create({ key, frames, frameRate, repeat });
+	}
+
 	update(_time: number, delta: number) {
 		const dt = delta / 1000;
 		const { width, height } = this.scale;
 
 		if (this.gameOver) {
 			return;
+		}
+		if (this.runnerHitbox) {
+			this.runnerHitbox.x = this.runner.x;
+			this.runnerHitbox.y = this.runner.y;
 		}
 
 		// ===== INPUT LANE (flèches / swipe) =====
@@ -308,9 +433,13 @@ export class MainScene extends Phaser.Scene {
 
 		// ===== VITESSE / SCROLL =====
 		this.speed = Math.max(0, this.speed - this.decayPerSecond * dt);
+		if (!this.isTransitionPlaying && this.speed <= 5) {
+			this.stopWalkLoop();
+		}
 		const scroll = this.speed * dt;
 		// le décor et les obstacles avancent à la même vitesse pour rester “collés” au fond
-		this.bg.tilePositionX += scroll;
+		this.bg.tilePositionX += scroll / 2.5;
+		this.houses.tilePositionX += scroll;
 		this.ground.tilePositionX += scroll;
 
 		// ===== COMPTEUR DE PAS =====
@@ -367,17 +496,19 @@ export class MainScene extends Phaser.Scene {
 			const o = this.obstacles[i];
 			o.x -= scroll;
 
-			// collision
-			if (
-				Phaser.Geom.Intersects.RectangleToRectangle(
+			const obstacleLane = o.getData('laneIndex') ?? 0;
+			const sameLane = obstacleLane === this.currentLaneIndex;
+			if (sameLane) {
+				const collides = Phaser.Geom.Intersects.RectangleToRectangle(
 					o.getBounds(),
-					this.runner.getBounds()
-				)
-			) {
-				o.destroy();
-				this.obstacles.splice(i, 1);
-				this.handleCrash();
-				continue;
+					this.runnerHitbox.getBounds()
+				);
+				if (collides) {
+					o.destroy();
+					this.obstacles.splice(i, 1);
+					this.handleCrash();
+					continue;
+				}
 			}
 
 			// hors écran
