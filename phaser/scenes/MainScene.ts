@@ -15,11 +15,23 @@ export class MainScene extends Phaser.Scene {
 
 	// --- BG & objets principaux ---
 	private bg!: Phaser.GameObjects.TileSprite;
-	private runner!: Phaser.GameObjects.Rectangle;
+	private ground!: Phaser.GameObjects.TileSprite;
+	private houses!: Phaser.GameObjects.TileSprite;
+	private runner!: Phaser.GameObjects.Sprite;
+	private runnerHitbox!: Phaser.GameObjects.Rectangle;
 	private speedText!: Phaser.GameObjects.Text;
 	private targetText!: Phaser.GameObjects.Text;
 	private spaceKey!: Phaser.Input.Keyboard.Key;
 	private stepsText!: Phaser.GameObjects.Text;
+	private transitionFrameKeys: string[] = [];
+	private walkFrameKeys: string[] = [];
+	private transitionAnimationKey = 'idle_to_run';
+	private walkAnimationKey = 'walk_loop';
+	private isTransitionPlaying = false;
+	private isWalkLoopPlaying = false;
+	private idleTextureKey = 'character_idle';
+	private obstacleTextureKeys: string[] = [];
+	private runnerScale = 0.3;
 
 	// Progress UI
 	private progressBarBg!: Phaser.GameObjects.Rectangle;
@@ -52,7 +64,9 @@ export class MainScene extends Phaser.Scene {
 
 	// --- Obstacles qui tombent du ciel ---
 	// maintenant on gère plusieurs obstacles en même temps
-	private fallingObstacles: Phaser.GameObjects.Rectangle[] = [];
+	private fallingObstacles: Array<
+		Phaser.GameObjects.Rectangle | Phaser.GameObjects.Sprite
+	> = [];
 	// on utilise un intervalle fixe pour un spawn plus régulier
 	private obstacleSpawnInterval = 1.5; // secondes
 	private obstacleFallSpeed = 500; // px/s
@@ -68,7 +82,51 @@ export class MainScene extends Phaser.Scene {
 	}
 
 	preload() {
-		this.load.image('bg', '/assets/bg.jpg');
+		this.transitionFrameKeys = [];
+		this.walkFrameKeys = [];
+		this.obstacleTextureKeys = [];
+		this.load.image('bg', '/assets/ciel.png');
+		this.load.image('ground', '/assets/sol.png');
+		this.load.image('houses', '/assets/maison.png');
+		this.load.image('character_idle', '/assets/character_idle.png');
+		const transitionFrames = 27;
+		for (let i = 0; i < transitionFrames; i++) {
+			const frameId = i.toString().padStart(5, '0');
+			const key = `transition_${frameId}`;
+			this.transitionFrameKeys.push(key);
+			this.load.image(
+				key,
+				`/assets/animations/Arret+Marche/Arret+Marche_${frameId}.png`
+			);
+		}
+		const walkFrames = 34;
+		for (let i = 0; i < walkFrames; i++) {
+			const frameId = i.toString().padStart(5, '0');
+			const key = `walk_${frameId}`;
+			this.walkFrameKeys.push(key);
+			this.load.image(
+				key,
+				`/assets/animations/marche loop/marche loop_${frameId}.png`
+			);
+		}
+		if (this.transitionFrameKeys.length > 0) {
+			this.idleTextureKey = this.transitionFrameKeys[0];
+		} else if (this.walkFrameKeys.length > 0) {
+			this.idleTextureKey = this.walkFrameKeys[0];
+		}
+		const obstacleFiles = [
+			'bulle collegue question.png',
+			'bulle croissant.png',
+			'bulle popcorn.png',
+			'bulle taxi.png',
+			'bulles mails.png',
+			'bulles manettes.png',
+		];
+		obstacleFiles.forEach((file, index) => {
+			const key = `obstacle_${index}`;
+			this.obstacleTextureKeys.push(key);
+			this.load.image(key, `/assets/obstacles/${file}`);
+		});
 	}
 
 	create() {
@@ -83,41 +141,37 @@ export class MainScene extends Phaser.Scene {
 		this.extraDecayRampDuration = this.isMobile ? 1.0 : 1.5;
 		this.extraDecayMaxMultiplier = this.isMobile ? 1.4 : 2.5;
 		this.stepMultiplier = this.isMobile ? 10 : 5;
+		this.runnerScale = this.isMobile ? 0.32 : 0.25;
 		this.speed = 400;
 
 		// ====== BACKGROUND SCROLLABLE ======
 
-		// facteur de “zoom-out visuel”
-		const bgScale = this.isMobile ? 1.6 : 1.0;
-
-		// TileSprite DOIT être plus grand que l’écran
-		this.bg = this.add
-			.tileSprite(0, 0, width * bgScale, height * bgScale, 'bg')
-			.setOrigin(0.5, 0.5);
-
-		// Place le BG au centre (important !)
-		this.bg.x = width / 2;
-		this.bg.y = height / 2;
+		this.bg = this.add.tileSprite(0, 0, width, height, 'bg').setOrigin(0, 0);
+		this.fitBackgroundToHeight(width, height);
+		this.houses = this.add
+			.tileSprite(0, height - 570, width, 300, 'houses')
+			.setOrigin(0, 0);
+		this.ground = this.add
+			.tileSprite(0, height - 270, width, 270, 'ground')
+			.setOrigin(0, 0);
+		this.scale.on('resize', this.handleResize, this);
 
 		// ===== RUNNER =====
-		const runnerScale = this.isMobile ? 0.7 : 1;
-		const runnerWidth = 40 * runnerScale;
-		const runnerHeight = 80 * runnerScale;
-
 		const runnerX = this.isMobile ? width * 0.18 : width * 0.22;
 		const runnerY = height * 0.9;
-
 		this.runner = this.add
-			.rectangle(runnerX, runnerY, runnerWidth, runnerHeight, 0x00ff00)
-			.setOrigin(0.5, 1);
-
-		this.tweens.add({
-			targets: this.runner,
-			y: runnerY - 10,
-			duration: 300,
-			yoyo: true,
-			repeat: -1,
-		});
+			.sprite(runnerX, runnerY, this.idleTextureKey)
+			.setOrigin(0.5, 1)
+			.setScale(this.runnerScale)
+			.setDepth(20);
+		this.createRunnerAnimations();
+		const hitboxWidth = this.runner.displayWidth * 0.45;
+		const hitboxHeight = this.runner.displayHeight * 0.7;
+		this.runnerHitbox = this.add
+			.rectangle(runnerX, runnerY, hitboxWidth, hitboxHeight, 0xff0000, 0.2)
+			.setOrigin(0.5, 1)
+			.setVisible(false);
+		this.playWalkLoop();
 
 		// ===== ZONE D'IMPACT AU SOL =====
 		// la zone est vers la droite de l'écran
@@ -304,8 +358,12 @@ export class MainScene extends Phaser.Scene {
 
 	// Accélération à chaque ESPACE / TAP
 	private boost() {
+		const wasStopped = this.speed <= 5;
 		this.speed = Math.min(this.speed + this.boostAmount, this.maxSpeed);
 		this.timeSinceLastBoost = 0;
+		if (wasStopped && this.speed > 0) {
+			this.playStartTransition();
+		}
 		this.targetText.setText(
 			`Boost: +${Math.round(this.boostAmount)} | Vitesse: ${Math.round(
 				this.speed
@@ -317,6 +375,15 @@ export class MainScene extends Phaser.Scene {
 		const dt = delta / 1000;
 		const { width, height } = this.scale;
 		const isMobile = !this.sys.game.device.os.desktop;
+
+		if (this.runnerHitbox) {
+			this.runnerHitbox.x = this.runner.x;
+			this.runnerHitbox.y = this.runner.y;
+			const hitboxWidth = this.runner.displayWidth * 0.45;
+			const hitboxHeight = this.runner.displayHeight * 0.7;
+			this.runnerHitbox.setSize(hitboxWidth, hitboxHeight);
+			this.runnerHitbox.setDisplaySize(hitboxWidth, hitboxHeight);
+		}
 
 		// ===== 1) VITESSE : acceleration sur tap, freinage naturel =====
 		this.timeSinceLastBoost += dt;
@@ -332,14 +399,8 @@ export class MainScene extends Phaser.Scene {
 		const extraDecay =
 			this.decayPerSecond * this.extraDecayMaxMultiplier * idleRatio * dt;
 		this.speed = Math.max(0, this.speed - baseDecay - extraDecay);
-
-		const speedRatio = this.maxSpeed > 0 ? this.speed / this.maxSpeed : 0;
-		if (speedRatio > 0.6) {
-			this.runner.setFillStyle(0x00ff00);
-		} else if (speedRatio > 0.3) {
-			this.runner.setFillStyle(0xffff00);
-		} else {
-			this.runner.setFillStyle(0x5555ff);
+		if (!this.isTransitionPlaying && this.speed <= 5) {
+			this.stopWalkLoop();
 		}
 
 		// ===== 2) SCROLL DU BG + MOUVEMENT "MONDE" =====
@@ -347,7 +408,13 @@ export class MainScene extends Phaser.Scene {
 		const scroll = (this.speed / 2) * dt;
 
 		// le décor "bouge"
-		this.bg.tilePositionX += scroll;
+		this.bg.tilePositionX += scroll / 3;
+		if (this.houses) {
+			this.houses.tilePositionX += scroll;
+		}
+		if (this.ground) {
+			this.ground.tilePositionX += scroll;
+		}
 
 		// Mise à jour du compteur de pas en fonction de la distance parcourue
 		if (!this.goalReached) {
@@ -415,18 +482,12 @@ export class MainScene extends Phaser.Scene {
 			const obstacleScale = isMobile ? 0.7 : 1;
 			const obstacleSize = 40 * obstacleScale;
 
-			// l'obstacle apparaît à la position actuelle de la zone d'impact (indicateur)
 			const spawnX = this.impactIndicator ? this.impactIndicator.x : width;
-			// compenser le déplacement horizontal qui sera appliqué juste après
-			const newObs = this.add
-				.rectangle(
-					spawnX + scroll,
-					-obstacleSize,
-					obstacleSize,
-					obstacleSize,
-					0xffaa00
-				)
-				.setOrigin(0.5, 0.5);
+			const newObs = this.createFallingObstacle(
+				spawnX + scroll,
+				-obstacleSize,
+				obstacleSize
+			);
 
 			this.fallingObstacles.push(newObs);
 
@@ -447,10 +508,10 @@ export class MainScene extends Phaser.Scene {
 
 				// collision avec le runner ?
 				let collided = false;
-				if (this.runner) {
+				if (this.runnerHitbox) {
 					collided = Phaser.Geom.Intersects.RectangleToRectangle(
 						o.getBounds(),
-						this.runner.getBounds()
+						this.runnerHitbox.getBounds()
 					);
 				}
 
@@ -458,10 +519,10 @@ export class MainScene extends Phaser.Scene {
 					// collision -> flash selon la vitesse
 					if (this.speed > this.safeSpeedForObstacle) {
 						this.cameras.main.flash(150, 255, 0, 0);
-						this.runner.setFillStyle(0xff0000);
+						this.runner.setTint(0xff0000);
 					} else {
 						this.cameras.main.flash(150, 0, 255, 0);
-						this.runner.setFillStyle(0x00ff00);
+						this.runner.setTint(0x00ff00);
 					}
 
 					o.destroy();
@@ -484,7 +545,7 @@ export class MainScene extends Phaser.Scene {
 		if (this.impactIndicator) {
 			const zoneLeft = this.impactIndicator.x - this.impactZoneWidth / 2;
 			const anyObstacleVisible = this.fallingObstacles.some(
-				(o) => o.x + o.width / 2 > 0
+				(o) => o.getBounds().right > 0
 			);
 			const allObstaclesOffLeft =
 				this.fallingObstacles.length === 0 || !anyObstacleVisible;
@@ -497,16 +558,11 @@ export class MainScene extends Phaser.Scene {
 				// spawn immédiat d'un nouvel obstacle à droite
 				const obstacleScale = isMobile ? 0.7 : 1;
 				const obstacleSize = 40 * obstacleScale;
-				const newObs = this.add
-					// compenser le scroll qui sera appliqué dans la même frame
-					.rectangle(
-						this.impactIndicator.x + scroll,
-						-obstacleSize,
-						obstacleSize,
-						obstacleSize,
-						0xffaa00
-					)
-					.setOrigin(0.5, 0.5);
+				const newObs = this.createFallingObstacle(
+					this.impactIndicator.x + scroll,
+					-obstacleSize,
+					obstacleSize
+				);
 
 				this.fallingObstacles.push(newObs);
 				// réinitialiser le timer pour garder le rythme
@@ -541,5 +597,136 @@ export class MainScene extends Phaser.Scene {
         );
         this.gaugeNeedle.setRotation(Phaser.Math.DegToRad(speedAngleDeg));
         */
+	}
+
+	private createRunnerAnimations() {
+		this.createAnimationFromKeys(
+			this.transitionAnimationKey,
+			this.transitionFrameKeys,
+			20,
+			0
+		);
+		this.createAnimationFromKeys(
+			this.walkAnimationKey,
+			this.walkFrameKeys,
+			24,
+			-1
+		);
+	}
+
+	private createAnimationFromKeys(
+		key: string,
+		frameKeys: string[],
+		frameRate: number,
+		repeat: number
+	) {
+		if (frameKeys.length === 0) return;
+		if (this.anims.exists(key)) return;
+		const frames = frameKeys.map((frameKey) => ({ key: frameKey }));
+		this.anims.create({ key, frames, frameRate, repeat });
+	}
+
+	private playStartTransition() {
+		if (this.isTransitionPlaying) return;
+		if (!this.anims.exists(this.transitionAnimationKey)) {
+			this.playWalkLoop();
+			return;
+		}
+		if (this.isWalkLoopPlaying && this.runner.anims) {
+			this.runner.anims.stop();
+			this.isWalkLoopPlaying = false;
+		}
+		this.isTransitionPlaying = true;
+		this.runner.play(this.transitionAnimationKey);
+		this.runner.once(
+			Phaser.Animations.Events.ANIMATION_COMPLETE_KEY +
+				this.transitionAnimationKey,
+			() => {
+				this.isTransitionPlaying = false;
+				this.playWalkLoop();
+			}
+		);
+	}
+
+	private playWalkLoop() {
+		if (this.isWalkLoopPlaying) return;
+		if (!this.anims.exists(this.walkAnimationKey)) return;
+		this.runner.play(this.walkAnimationKey);
+		this.isWalkLoopPlaying = true;
+	}
+
+	private stopWalkLoop() {
+		if (!this.isWalkLoopPlaying) return;
+		if (this.runner.anims) {
+			this.runner.anims.stop();
+		}
+		this.runner.setTexture(this.idleTextureKey);
+		this.runner.clearTint();
+		this.isWalkLoopPlaying = false;
+	}
+
+	private handleResize(gameSize: Phaser.Structs.Size) {
+		const { width, height } = gameSize;
+		if (this.bg) {
+			this.bg.setSize(width, height);
+			this.bg.setTilePosition(0, 0);
+			this.fitBackgroundToHeight(width, height);
+		}
+		if (this.houses) {
+			this.houses.setSize(width, this.houses.height);
+			this.houses.setPosition(0, height - 570);
+		}
+		if (this.ground) {
+			this.ground.setSize(width, this.ground.height);
+			this.ground.setPosition(0, height - 270);
+		}
+		if (this.runner) {
+			const runnerX = this.isMobile ? width * 0.18 : width * 0.22;
+			const runnerY = height * 0.9;
+			this.runner.setPosition(runnerX, runnerY);
+			this.runner.setScale(this.runnerScale);
+			if (this.runnerHitbox) {
+				this.runnerHitbox.setPosition(runnerX, runnerY);
+				const hitboxWidth = this.runner.displayWidth * 0.45;
+				const hitboxHeight = this.runner.displayHeight * 0.7;
+				this.runnerHitbox.setSize(hitboxWidth, hitboxHeight);
+				this.runnerHitbox.setDisplaySize(hitboxWidth, hitboxHeight);
+			}
+			this.impactGroundY = runnerY;
+		}
+	}
+
+	private fitBackgroundToHeight(width: number, height: number) {
+		const texture = this.textures.get('bg');
+		const source = texture.getSourceImage() as HTMLImageElement | undefined;
+		const frame = this.textures.getFrame('bg');
+		const frameHeight = source?.height ?? frame?.height;
+		if (!frameHeight || frameHeight === 0) return;
+		const scale = height / frameHeight;
+		this.bg.setTileScale(scale, scale);
+	}
+
+	private createFallingObstacle(
+		x: number,
+		y: number,
+		size: number
+	): Phaser.GameObjects.Rectangle | Phaser.GameObjects.Sprite {
+		let obs: Phaser.GameObjects.Rectangle | Phaser.GameObjects.Sprite;
+		if (this.obstacleTextureKeys.length > 0) {
+			const textureKey = Phaser.Utils.Array.GetRandom(this.obstacleTextureKeys);
+			const sprite = this.add
+				.sprite(x, y, textureKey)
+				.setOrigin(0.5, 0.5)
+				.setDepth(10);
+			const displaySize = this.isMobile ? size : size * 1.2;
+			sprite.setDisplaySize(displaySize, displaySize);
+			obs = sprite;
+		} else {
+			obs = this.add
+				.rectangle(x, y, size, size, 0xffaa00)
+				.setOrigin(0.5, 0.5)
+				.setDepth(10);
+		}
+		return obs;
 	}
 }
