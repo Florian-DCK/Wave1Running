@@ -1,59 +1,67 @@
-"use client";
+'use client';
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef } from 'react';
+import type PhaserType from 'phaser';
 
 export default function PhaserGame() {
-    const containerRef = useRef<HTMLDivElement | null>(null);
-    const gameRef = useRef<any>(null);
+	const containerRef = useRef<HTMLDivElement | null>(null);
+	const gameRef = useRef<PhaserType.Game | null>(null);
 
-    useEffect(() => {
-        let game: any;
+	useEffect(() => {
+		let game: PhaserType.Game | null = null;
 
-        async function loadPhaser() {
-            const Phaser = await import("phaser"); // ⬅️ LOADED CLIENT SIDE ONLY
-            const { MainScene } = await import("@/phaser/scenes/MainScene");
+		async function loadPhaser() {
+			// Charge Phaser et les scènes uniquement côté client pour éviter l'accès SSR à window
+			const Phaser = await import('phaser');
+			const [{ GameplayScene }, { EnvironmentScene }, { UIScene }] =
+				await Promise.all([
+					import('@/phaser/scenes/GameplayScene'),
+					import('@/phaser/scenes/EnvironmentScene'),
+					import('@/phaser/scenes/UIScene'),
+				]);
+			const scenes = [GameplayScene, EnvironmentScene, UIScene];
 
-            const container = containerRef.current;
-            if (!container) return;
+			const container = containerRef.current;
+			if (!container) return;
 
-            const width = container.clientWidth;
-            const height = container.clientHeight;
+			const width = container.clientWidth;
+			const height = container.clientHeight;
 
-            game = new Phaser.Game({
-                type: Phaser.AUTO,
-                width,
-                height,
-                parent: container,
-                scene: [MainScene],
-                scale: {
-                    mode: Phaser.Scale.RESIZE,
-                    autoCenter: Phaser.Scale.CENTER_BOTH,
-                },
-            });
+			game = new Phaser.Game({
+				type: Phaser.AUTO,
+				width,
+				height,
+				parent: container,
+				scene: scenes,
+				scale: {
+					mode: Phaser.Scale.RESIZE,
+					autoCenter: Phaser.Scale.CENTER_BOTH,
+				},
+			});
 
-            gameRef.current = game;
-        }
+			gameRef.current = game;
+		}
 
-        loadPhaser();
+		loadPhaser();
 
-        return () => {
-            if (gameRef.current) {
-                gameRef.current.destroy(true);
-            }
-        };
-    }, []);
+		return () => {
+			if (gameRef.current) {
+				gameRef.current.destroy(true);
+			}
+		};
+	}, []);
 
-    return (
-        <div
-            ref={containerRef}
-            style={{
-                position: "fixed",
-                inset: 0,
-                width: "100vw",
-                height: "100dvh",
-                overflow: "hidden",
-                background: "black",
-            }}
-        />
-    );
+	return (
+		<div
+			ref={containerRef}
+			style={{
+				position: 'fixed',
+				inset: 0,
+				width: '100vw',
+				height: '100dvh',
+				overflow: 'hidden',
+				background: 'black',
+			}}
+		/>
+	);
 }
