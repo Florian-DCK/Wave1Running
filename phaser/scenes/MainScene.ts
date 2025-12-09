@@ -1220,7 +1220,11 @@ export class MainScene extends Phaser.Scene {
 	}
 
 	private updateSkyFade(ratio: number) {
-		if (!this.bgMorningPair.length || !this.bgDayPair.length || !this.bgEveningPair.length)
+		if (
+			!this.bgMorningPair.length ||
+			!this.bgDayPair.length ||
+			!this.bgEveningPair.length
+		)
 			return;
 		const setPairAlpha = (pair: Phaser.GameObjects.Image[], alpha: number) => {
 			pair.forEach((img) => img.setAlpha(alpha));
