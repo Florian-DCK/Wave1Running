@@ -1,5 +1,56 @@
 {
-	"HomePage": {
-		"title": "Hello world!"
+	"Game": {
+		"charging": "Patience, on se met sur la ligne de départ...",
+		"game1": {
+			"intro": "C'est parti <firstname>FIRSTNAME</firstname> !<br></br>Objectif : 10.000 pas !<br></br>Ne vous laissez pas distraire ! Des bulles tombent du ciel pour vous perturber.<br></br>Tapotez la barre d'espace pour freiner et les esquiver.<br></br>Vous devez atteindre 10.000 pas pour réussir !",
+			"inGame": {
+				"good": {
+					"1": "On avance bien !",
+					"2": "On y arrive, pas à pas.",
+					"3": "Joli réflexe !",
+					"4": "Bien évité !",
+					"5": "Le rythme est bon !",
+					"6": "Cap sur les 10 000 !"
+				},
+				"bad": {
+					"1": "Attention, restez concentré.",
+					"2": "Aïe ! Touché !",
+					"3": "Oups... Prudence !",
+					"4": "Aïe ! Une vie en moins.",
+					"5": "Restez concentré !",
+					"6": "Gare aux distractions !",
+					"7": "Le compteur s'ennuie...",
+					"8": "Il faut bouger !"
+				}
+			},
+			"CTA": "C'est parti !",
+			"retry": "Oups... L'objectif n'est pas atteint. Ne lâchez rien - réessayez !",
+			"win": "Bravo <firstname>FIRSTNAME</firstname> ! 10.000 pas au compteur ! Plus qu'une question pour tenter de gagner !",
+			"CTA2": "Je retente ma chance"
+		},
+		"transition": "Bravo, objectif atteint et participation validée ! Et si vous tentiez le doublé ? Regardez ce qui vous attend...",
+		"game2": {
+			"intro": "C'est parti pour la seconde course, <firstname>FIRSTNAME</firstname> !<br></br>Tapotez la barre d'espace pour freiner au bon moment.<br></br>Visez à nouveau les 10.000 pas ! Mais attention, ça se corse : gérez bien les bulles, vous n'avez droit qu'à 3 erreurs.<br></br>Bonne course !",
+			"inGame": {
+				"good": {
+					"1": "Quel souffle !",
+					"2": "Le rythme est bon !",
+					"3": "On garde la cadence !",
+					"4": "Joli jeu de jambes !"
+				},
+				"bad": {
+					"1": "Aïe ! Restez concentré.",
+					"2": "Attention aux obstacles !",
+					"3": "Attention, ça va vite !",
+					"4": "Allez, on relance !",
+					"5": "Le compteur s'impatiente...",
+					"6": "Ne lâchez rien !"
+				}
+			},
+			"CTA": "C'est parti !",
+			"retry": "Oups... Les 10.000 pas ne sont pas atteints. On retente ?",
+			"win": "Encore un sans-faute ! <firstname>FIRSTNAME</firstname> ! Il ne reste plus qu'à répondre à la question finale.",
+			"CTA2": "Je retente ma chance"
+		}
 	}
 }

@@ -14,7 +14,13 @@ export class MainScene extends Phaser.Scene {
 	private extraDecayMaxMultiplier = 0;
 
 	// --- BG & objets principaux ---
-	private bg!: Phaser.GameObjects.TileSprite;
+	private bgMorningPair: Phaser.GameObjects.Image[] = [];
+	private bgDayPair: Phaser.GameObjects.Image[] = [];
+	private bgEveningPair: Phaser.GameObjects.Image[] = [];
+	private skyPairs: Phaser.GameObjects.Image[][] = [];
+	private skyFadeThresholds = [0.33, 0.66];
+	private skySourceHeight = 513; // hauteur native des assets ciel
+	private groundHeight = 200;
 	private ground!: Phaser.GameObjects.TileSprite;
 	private houses!: Phaser.GameObjects.TileSprite;
 	private housesHeight = 300; // hauteur par défaut pour phase 1
@@ -35,7 +41,17 @@ export class MainScene extends Phaser.Scene {
 	private progressCircleRadius = 100;
 	private progressCircleCenterX = 0;
 	private progressCircleCenterY = 0;
-	private currentProgressRatio = 0;
+	private currentProgressRatio = 0; // basé sur les pas (UI)
+	private timeProgressRatio = 0; // basé sur le temps restant pour le fade du ciel
+	private levelDuration = 120;
+	private timeRemaining = 0;
+	private isTimeOver = false;
+	private timeBarBg!: Phaser.GameObjects.Graphics;
+	private timeBarFill!: Phaser.GameObjects.Graphics;
+	private timeBarWidth = 0;
+	private timeBarHeight = 0;
+	private timeBarX = 0;
+	private timeBarY = 0;
 	private transitionFrameKeys: string[] = [];
 	private walkFrameKeys: string[] = [];
 	private transitionAnimationKey = 'idle_to_run';
@@ -69,12 +85,6 @@ export class MainScene extends Phaser.Scene {
 	private tutorialTimer?: Phaser.Time.TimerEvent;
 	private lastMilestone = 0;
 
-	// --- Jauge de vitesse (désactivée) ---
-	// private gaugeContainer!: Phaser.GameObjects.Container;
-	// private gaugeNeedle!: Phaser.GameObjects.Rectangle;
-	// private minGaugeAngleDeg = -120;
-	// private maxGaugeAngleDeg = 120;
-
 	// --- Zone d'impact au sol (où les obstacles tombent) ---
 	private impactZoneX = 0;
 	private impactZoneWidth = 120;
@@ -85,13 +95,12 @@ export class MainScene extends Phaser.Scene {
 	private topIndicator!: Phaser.GameObjects.Graphics;
 
 	// --- Obstacles qui tombent du ciel ---
-	// maintenant on gère plusieurs obstacles en même temps
 	private fallingObstacles: Array<
 		Phaser.GameObjects.Rectangle | Phaser.GameObjects.Sprite
 	> = [];
 	// on utilise un intervalle fixe pour un spawn plus régulier
 	private obstacleSpawnInterval = 2.5; // secondes
-	private obstacleFallSpeed = 500; // px/s
+	private obstacleFallSpeed = 400; // px/s
 	private obstacleSpawnTimer = 0;
 	private nextObstacleTime = 0;
 	private safeSpeedForObstacle = 200; // en dessous → esquive réussie
@@ -112,7 +121,9 @@ export class MainScene extends Phaser.Scene {
 		this.transitionFrameKeys = [];
 		this.walkFrameKeys = [];
 		this.obstacleTextureKeys = [];
-		this.load.image('bg', '/assets/ciel.png');
+		this.load.image('bg_morning', '/assets/ciel matin.png');
+		this.load.image('bg_day', '/assets/ciel.png');
+		this.load.image('bg_evening', '/assets/ciel soir.png');
 
 		// Charger les assets des 4 phases
 		// Phase 1: maison + plante
@@ -183,29 +194,59 @@ export class MainScene extends Phaser.Scene {
 
 		this.runSpeed = this.isMobile ? 400 : 800;
 		this.maxSpeed = this.isMobile ? 900 : 1400;
-		this.boostAmount = this.isMobile ? 120 : 220;
-		this.decayPerSecond = this.isMobile ? 180 : 500;
-		this.extraDecayDelay = this.isMobile ? 0.5 : 0.8;
+		this.boostAmount = this.isMobile ? 200 : 400;
+		this.decayPerSecond = this.isMobile ? 500 : 1000;
+		this.extraDecayDelay = this.isMobile ? 0.5 : 0.5;
 		this.extraDecayRampDuration = this.isMobile ? 1.0 : 1.5;
 		this.extraDecayMaxMultiplier = this.isMobile ? 1.4 : 2.5;
 		this.stepMultiplier = this.isMobile ? 10 : 5;
-		this.runnerScale = this.isMobile ? 0.2 : 0.4;
-		this.speed = 400;
+		this.runnerScale = this.isMobile ? 0.3 : 0.4;
+		this.speed = 0;
 
 		// ====== BACKGROUND SCROLLABLE ======
 
-		this.bg = this.add.tileSprite(0, 0, width, height, 'bg').setOrigin(0, 0);
+		const skyConfigs = [
+			{ key: 'bg_morning', alpha: 1 },
+			{ key: 'bg_day', alpha: 0 },
+			{ key: 'bg_evening', alpha: 0 },
+		];
+
+		this.skyPairs = skyConfigs.map((config) => {
+			const left = this.add
+				.image(0, 0, config.key)
+				.setOrigin(0, 0)
+				.setAlpha(config.alpha)
+				.setScrollFactor(0);
+			const right = this.add
+				.image(width, 0, config.key)
+				.setOrigin(0, 0)
+				.setAlpha(config.alpha)
+				.setScrollFactor(0);
+			const texture = this.textures.get(config.key);
+			if (texture) {
+				texture.setFilter(Phaser.Textures.FilterMode.NEAREST);
+			}
+			return [left, right];
+		});
+		[this.bgMorningPair, this.bgDayPair, this.bgEveningPair] = this.skyPairs;
 		this.fitBackgroundToHeight(width, height);
-		const groundHeight = 200;
+		this.updateSkyFade(0);
+		const groundHeight = this.groundHeight;
+		// Ajuster la scale des maisons pour mobile
+		const initialHousesScale = this.isMobile ? 0.8 : 1;
+		this.housesScale = initialHousesScale;
+		const adjustedHousesHeight = this.housesHeight * initialHousesScale;
+
 		this.houses = this.add
 			.tileSprite(
 				0,
-				height - groundHeight - this.housesHeight,
+				height - groundHeight - adjustedHousesHeight,
 				width,
-				this.housesHeight,
+				adjustedHousesHeight,
 				'houses_phase1'
 			)
-			.setOrigin(0, 0);
+			.setOrigin(0, 0)
+			.setTileScale(initialHousesScale, initialHousesScale);
 		this.ground = this.add
 			.tileSprite(
 				0,
@@ -215,9 +256,7 @@ export class MainScene extends Phaser.Scene {
 				'ground_phase1'
 			)
 			.setOrigin(0, 0);
-		this.scale.on('resize', this.handleResize, this);
-
-		// ===== RUNNER =====
+		this.scale.on('resize', this.handleResize, this); // ===== RUNNER =====
 		const runnerX = this.isMobile ? width * 0.18 : width * 0.22;
 		const runnerY = height * 0.95;
 		this.runner = this.add
@@ -226,11 +265,11 @@ export class MainScene extends Phaser.Scene {
 			.setScale(this.runnerScale)
 			.setDepth(8);
 		this.createRunnerAnimations();
-		const hitboxWidth = this.runner.displayWidth * 0.45;
+		const hitboxWidth = this.runner.displayWidth * 0.2;
 		const hitboxHeight = this.runner.displayHeight * 0.7;
 		this.runnerHitbox = this.add
 			.rectangle(runnerX, runnerY, hitboxWidth, hitboxHeight, 0xff0000, 0.2)
-			.setOrigin(0.5, 1)
+			.setOrigin(0.5, 1.25)
 			.setVisible(false);
 		this.playWalkLoop();
 
@@ -253,6 +292,11 @@ export class MainScene extends Phaser.Scene {
 			repeat: -1,
 			ease: 'Sine.easeInOut',
 		});
+
+		this.timeRemaining = this.levelDuration;
+		this.timeBarBg = this.add.graphics().setDepth(60);
+		this.timeBarFill = this.add.graphics().setDepth(61);
+		this.timeBarHeight = this.isMobile ? 14 : 12;
 
 		// ajouter un point d'exclamation rouge comme indicateur
 		const exclamSize = this.isMobile ? 48 : 64;
@@ -288,7 +332,7 @@ export class MainScene extends Phaser.Scene {
 		}
 		this.stepsCountText = this.add
 			.text(0, 0, '0', {
-				fontSize: this.isMobile ? '24px' : '24px',
+				fontSize: this.isMobile ? '18px' : '24px',
 				fontFamily: this.uiFont,
 				color: '#111111',
 			})
@@ -296,7 +340,7 @@ export class MainScene extends Phaser.Scene {
 			.setDepth(8);
 		this.stepsGoalText = this.add
 			.text(0, 0, `/ ${this.targetSteps} pas`, {
-				fontSize: this.isMobile ? '18px' : '18px',
+				fontSize: this.isMobile ? '14px' : '18px',
 				fontFamily: this.uiFont,
 				color: '#111111',
 			})
@@ -314,6 +358,8 @@ export class MainScene extends Phaser.Scene {
 			this.heartsIcons.push(heart);
 		}
 		this.layoutProgressUi(width);
+		this.layoutTimeBar(width);
+		this.updateTimeUi();
 		this.ensureUiFontLoaded();
 
 		// ===== INPUTS =====
@@ -373,6 +419,7 @@ export class MainScene extends Phaser.Scene {
 
 	// Accélération à chaque ESPACE / TAP
 	private boost() {
+		if (this.isTimeOver || this.goalReached) return;
 		const wasStopped = this.speed <= 5;
 		this.speed = Math.min(this.speed + this.boostAmount, this.maxSpeed);
 		this.timeSinceLastBoost = 0;
@@ -386,10 +433,14 @@ export class MainScene extends Phaser.Scene {
 		const { width, height } = this.scale;
 		const isMobile = !this.sys.game.device.os.desktop;
 
+		if (this.isTimeOver) {
+			return;
+		}
+
 		if (this.runnerHitbox) {
 			this.runnerHitbox.x = this.runner.x;
 			this.runnerHitbox.y = this.runner.y;
-			const hitboxWidth = this.runner.displayWidth * 0.45;
+			const hitboxWidth = this.runner.displayWidth * 0.2;
 			const hitboxHeight = this.runner.displayHeight * 0.7;
 			this.runnerHitbox.setSize(hitboxWidth, hitboxHeight);
 			this.runnerHitbox.setDisplaySize(hitboxWidth, hitboxHeight);
@@ -417,8 +468,34 @@ export class MainScene extends Phaser.Scene {
 
 		const scroll = (this.speed / 2) * dt;
 
+		if (!this.goalReached && !this.isTimeOver) {
+			this.timeRemaining = Math.max(0, this.timeRemaining - dt);
+			this.timeProgressRatio =
+				this.levelDuration > 0
+					? 1 - this.timeRemaining / this.levelDuration
+					: 1;
+			this.updateSkyFade(this.timeProgressRatio);
+			this.updateTimeUi();
+			if (this.timeRemaining <= 0) {
+				this.handleTimeUp();
+				return;
+			}
+		}
+
 		// le décor "bouge"
-		this.bg.tilePositionX += scroll / 3;
+		const bgScroll = scroll / 3;
+		// scroll infini manuel pour les ciels (paires d'images)
+		if (this.skyPairs.length) {
+			this.skyPairs.forEach((pair) => {
+				pair.forEach((img) => {
+					const w = img.displayWidth;
+					img.x -= bgScroll;
+					if (img.x <= -w) {
+						img.x += w * 2;
+					}
+				});
+			});
+		}
 		if (this.houses) {
 			this.houses.tilePositionX += scroll;
 		}
@@ -560,13 +637,8 @@ export class MainScene extends Phaser.Scene {
 				}
 
 				if (collided) {
-					// collision -> afficher message "Oups, prudence !"
-					if (this.speed > this.safeSpeedForObstacle) {
-						this.cameras.main.flash(150, 255, 0, 0);
-						this.showTutorialMessage('Oups, prudence !');
-					} else {
-						this.cameras.main.flash(150, 0, 255, 0);
-					}
+					this.cameras.main.flash(150, 255, 0, 0);
+					this.showTutorialMessage('Oups, prudence !');
 
 					o.destroy();
 					this.fallingObstacles.splice(i, 1);
@@ -714,7 +786,6 @@ export class MainScene extends Phaser.Scene {
 	private checkStepMilestones() {
 		let message = '';
 		let milestone = 0;
-
 		if (this.steps < 200 && this.lastMilestone < 200) {
 			message = 'Evites les bulles de distraction\nen t’arrêtant';
 			milestone = 200;
@@ -737,7 +808,6 @@ export class MainScene extends Phaser.Scene {
 			message = 'Presque là ! Dernier effort ! 🚀';
 			milestone = 9000;
 		}
-
 		if (message) {
 			this.showTutorialMessage(message);
 			this.lastMilestone = milestone;
@@ -760,13 +830,18 @@ export class MainScene extends Phaser.Scene {
 		const fontSize = this.isMobile ? '20px' : '24px';
 
 		this.tutorialText = this.add
-			.text(width / 2, height * 0.1, message, {
-				fontFamily: this.uiFont,
-				fontSize: fontSize,
-				color: '#6A225D',
-				padding: { x: 20, y: 12 },
-				align: 'center',
-			})
+			.text(
+				width / 2,
+				this.isMobile ? height / 2 - 70 : height * 0.1,
+				message,
+				{
+					fontFamily: this.uiFont,
+					fontSize: fontSize,
+					color: '#6A225D',
+					padding: { x: 20, y: 12 },
+					align: 'center',
+				}
+			)
 			.setOrigin(0.5)
 			.setDepth(100)
 			.setAlpha(0);
@@ -775,7 +850,7 @@ export class MainScene extends Phaser.Scene {
 		this.tweens.add({
 			targets: this.tutorialText,
 			alpha: 1,
-			y: height * 0.2,
+			y: this.isMobile ? height / 2 - 80 : height * 0.2,
 			duration: 400,
 			ease: 'Back.easeOut',
 			onComplete: () => {
@@ -802,30 +877,22 @@ export class MainScene extends Phaser.Scene {
 
 	private transitionToPhase(newPhase: number) {
 		if (this.isTransitioning || newPhase < 0 || newPhase > 3) {
-			console.log('Transition bloquée:', {
-				isTransitioning: this.isTransitioning,
-				newPhase,
-			});
 			return;
 		}
 
-		console.log(`🎬 DÉBUT Transition vers phase ${newPhase + 1}`);
 		this.isTransitioning = true;
 		const phaseNumber = newPhase + 1; // phase 0 = phase1, etc.
 
 		if (!this.fadeOverlay) {
-			console.error("❌ fadeOverlay n'existe pas !");
 			this.isTransitioning = false;
 			return;
 		}
-
-		console.log('✅ Cross-fade démarré');
 
 		// Déterminer la hauteur selon la phase
 		let newHousesHeight;
 		let newHousesScale = 1;
 		const { width, height } = this.scale;
-		const groundHeight = 200;
+		const groundHeight = this.groundHeight;
 
 		if (phaseNumber === 1 || phaseNumber === 4) {
 			newHousesHeight = 300; // Phase 1 et 4: maison
@@ -834,13 +901,20 @@ export class MainScene extends Phaser.Scene {
 			const targetHeight = height - groundHeight;
 			newHousesHeight = originalBuldingHeight;
 			newHousesScale = targetHeight / originalBuldingHeight;
+			// Ajuster la scale pour mobile si nécessaire
+			if (this.isMobile) {
+				newHousesScale *= 0.8; // 0.8 = 80% de la taille desktop
+			}
 		} else {
 			const originalOfficeHeight = 768;
 			const targetHeight = height - groundHeight;
 			newHousesHeight = originalOfficeHeight;
 			newHousesScale = targetHeight / originalOfficeHeight;
+			// Ajuster la scale pour mobile si nécessaire
+			if (this.isMobile) {
+				newHousesScale *= 1; // 0.8 = 80% de la taille desktop
+			}
 		}
-
 		const scaledHeight = newHousesHeight * newHousesScale;
 
 		// Créer les nouveaux TileSprites pour la nouvelle phase (en dessous des anciens)
@@ -976,7 +1050,7 @@ export class MainScene extends Phaser.Scene {
 		}
 		const fontSet = (document as Document).fonts;
 		// Charger toutes les tailles utilisées
-		const fontSizes = ['18px', '24px', '28px', '48px', '64px'];
+		const fontSizes = ['14px', '18px', '24px', '28px', '48px', '64px'];
 		const fontPromises = fontSizes.map((size) =>
 			fontSet.load(`${size} "${this.uiFont}"`).catch(() => {})
 		);
@@ -1011,12 +1085,12 @@ export class MainScene extends Phaser.Scene {
 		const desktopRadius = 100;
 		this.progressCircleCenterX = this.isMobile ? width / 2 : width - 120;
 		this.progressCircleCenterY = this.isMobile ? 150 : 120;
-		this.progressCircleRadius = this.isMobile ? 90 : desktopRadius;
+		this.progressCircleRadius = this.isMobile ? 70 : desktopRadius;
 		this.drawProgressBackground();
 		this.drawProgressArc(this.currentProgressRatio);
-		const topOffset = this.isMobile ? 40 : 40;
-		const goalOffset = this.isMobile ? 18 : 18;
-		const heartsOffset = this.isMobile ? 35 : 35;
+		const topOffset = this.isMobile ? 25 : 40;
+		const goalOffset = this.isMobile ? 10 : 18;
+		const heartsOffset = this.isMobile ? 30 : 35;
 		this.stepsIcon?.setPosition(
 			this.progressCircleCenterX,
 			this.progressCircleCenterY - this.progressCircleRadius + topOffset
@@ -1029,23 +1103,40 @@ export class MainScene extends Phaser.Scene {
 			this.progressCircleCenterX,
 			this.progressCircleCenterY + goalOffset
 		);
-		const heartsSpacing = this.isMobile ? 30 : 30;
+		const heartsSpacing = this.isMobile ? 25 : 30;
 		const heartRowY =
 			this.progressCircleCenterY + this.progressCircleRadius - heartsOffset;
 		const totalWidth = heartsSpacing * (this.heartsIcons.length - 1);
 		const startX = this.progressCircleCenterX - totalWidth / 2;
-		const heartSize = this.isMobile ? 25 : 25;
+		const heartSize = this.isMobile ? 20 : 25;
 		this.heartsIcons.forEach((heart, index) => {
 			heart.setDisplaySize(heartSize, heartSize);
 			heart.setPosition(startX + heartsSpacing * index, heartRowY);
 		});
 	}
 
+	private layoutTimeBar(width: number) {
+		if (!this.timeBarBg || !this.timeBarFill) return;
+		const margin = this.isMobile ? 24 : 32;
+		const topOffset = 26;
+		this.timeBarHeight = this.isMobile ? 12 : 12;
+		this.timeBarWidth = this.isMobile
+			? width - margin
+			: Math.max(200, width / 2);
+		this.timeBarX = width / 2 - this.timeBarWidth / 2;
+		this.timeBarY = topOffset;
+		this.drawTimeBar(
+			this.levelDuration > 0
+				? Phaser.Math.Clamp(this.timeRemaining / this.levelDuration, 0, 1)
+				: 0
+		);
+	}
+
 	private drawProgressBackground() {
 		if (!this.progressCircleBg) return;
-		const strokeWidth = this.isMobile ? 12 : 8;
+		const strokeWidth = this.isMobile ? 6 : 8;
 		const innerRadius = Math.max(
-			this.progressCircleRadius - (this.isMobile ? 14 : 10),
+			this.progressCircleRadius + (this.isMobile ? 14 : 10),
 			10
 		);
 
@@ -1068,6 +1159,41 @@ export class MainScene extends Phaser.Scene {
 				this.progressCircleRadius
 			);
 		}
+	}
+
+	private drawTimeBar(ratio: number) {
+		if (!this.timeBarBg || !this.timeBarFill) return;
+		const clamped = Phaser.Math.Clamp(ratio, 0, 1);
+		this.timeBarBg.clear();
+		this.timeBarBg.fillStyle(0x000000, 0.35);
+		this.timeBarBg.fillRoundedRect(
+			this.timeBarX - 2,
+			this.timeBarY - 2,
+			this.timeBarWidth + 4,
+			this.timeBarHeight + 4,
+			6
+		);
+		this.timeBarFill.clear();
+		if (clamped <= 0) {
+			return;
+		}
+		const fillColor = 0x6607a6;
+		this.timeBarFill.fillStyle(fillColor, 0.95);
+		this.timeBarFill.fillRoundedRect(
+			this.timeBarX,
+			this.timeBarY,
+			this.timeBarWidth * clamped,
+			this.timeBarHeight,
+			4
+		);
+	}
+
+	private updateTimeUi() {
+		const ratio =
+			this.levelDuration > 0
+				? Phaser.Math.Clamp(this.timeRemaining / this.levelDuration, 0, 1)
+				: 0;
+		this.drawTimeBar(ratio);
 	}
 
 	private drawProgressArc(ratio: number) {
@@ -1093,14 +1219,47 @@ export class MainScene extends Phaser.Scene {
 		this.progressCircleFill.strokePath();
 	}
 
+	private updateSkyFade(ratio: number) {
+		if (!this.bgMorningPair.length || !this.bgDayPair.length || !this.bgEveningPair.length)
+			return;
+		const setPairAlpha = (pair: Phaser.GameObjects.Image[], alpha: number) => {
+			pair.forEach((img) => img.setAlpha(alpha));
+		};
+		const clamped = Phaser.Math.Clamp(ratio, 0, 1);
+		const [phaseOne, phaseTwo] = this.skyFadeThresholds;
+
+		if (clamped <= phaseOne) {
+			setPairAlpha(this.bgMorningPair, 1);
+			setPairAlpha(this.bgDayPair, 0);
+			setPairAlpha(this.bgEveningPair, 0);
+			return;
+		}
+
+		if (clamped <= phaseTwo) {
+			const t = Phaser.Math.Clamp(
+				(clamped - phaseOne) / (phaseTwo - phaseOne),
+				0,
+				1
+			);
+			setPairAlpha(this.bgMorningPair, 1 - t);
+			setPairAlpha(this.bgDayPair, t);
+			setPairAlpha(this.bgEveningPair, 0);
+			return;
+		}
+
+		const t = Phaser.Math.Clamp((clamped - phaseTwo) / (1 - phaseTwo), 0, 1);
+		setPairAlpha(this.bgMorningPair, 0);
+		setPairAlpha(this.bgDayPair, 1 - t);
+		setPairAlpha(this.bgEveningPair, t);
+	}
+
 	private handleResize(gameSize: Phaser.Structs.Size) {
 		const { width, height } = gameSize;
-		if (this.bg) {
-			this.bg.setSize(width, height);
-			this.bg.setTilePosition(0, 0);
+		if (this.skyPairs.length) {
 			this.fitBackgroundToHeight(width, height);
+			this.updateSkyFade(this.timeProgressRatio);
 		}
-		const groundHeight = 200;
+		const groundHeight = this.groundHeight;
 		if (this.houses) {
 			this.houses.setSize(width, this.housesHeight);
 			this.houses.setPosition(0, height - groundHeight - this.housesHeight);
@@ -1129,16 +1288,30 @@ export class MainScene extends Phaser.Scene {
 			this.fadeOverlay.fillRect(0, 0, width, height);
 		}
 		this.layoutProgressUi(width);
+		this.layoutTimeBar(width);
 	}
 
 	private fitBackgroundToHeight(width: number, height: number) {
-		const texture = this.textures.get('bg');
-		const source = texture.getSourceImage() as HTMLImageElement | undefined;
-		const frame = this.textures.getFrame('bg');
-		const frameHeight = source?.height ?? frame?.height;
-		if (!frameHeight || frameHeight === 0) return;
-		const scale = height / frameHeight;
-		this.bg.setTileScale(scale, scale);
+		if (!this.skyPairs.length) return;
+		const targetHeight = height;
+		const targetY = 0;
+		this.skyPairs.forEach((pair) => {
+			const key = pair[0].texture.key;
+			const texture = this.textures.get(key);
+			const source = texture.getSourceImage() as HTMLImageElement | undefined;
+			const frame = this.textures.getFrame(key);
+			const frameHeight =
+				source?.height ?? frame?.height ?? this.skySourceHeight;
+			const frameWidth = source?.width ?? frame?.width ?? frameHeight;
+			if (!frameHeight || frameHeight <= 0 || !frameWidth || frameWidth <= 0)
+				return;
+			const scale = targetHeight / frameHeight;
+			const scaledWidth = frameWidth * scale;
+			pair.forEach((img, idx) => {
+				img.setScale(scale, scale);
+				img.setPosition(idx === 0 ? 0 : scaledWidth, targetY);
+			});
+		});
 	}
 
 	private createFallingObstacle(
@@ -1163,5 +1336,31 @@ export class MainScene extends Phaser.Scene {
 				.setDepth(10);
 		}
 		return obs;
+	}
+
+	private handleTimeUp() {
+		if (this.isTimeOver) return;
+		this.isTimeOver = true;
+		this.timeRemaining = 0;
+		this.updateTimeUi();
+		this.speed = 0;
+		this.stopWalkLoop();
+		this.fallingObstacles.forEach((obs) => obs.destroy());
+		this.fallingObstacles = [];
+		this.bushes.forEach((bush) => bush.destroy());
+		this.bushes = [];
+		const { width, height } = this.scale;
+		this.cameras.main.flash(300, 255, 64, 64);
+		this.add
+			.text(width / 2, height / 2, 'Temps écoulé', {
+				fontFamily: this.uiFont,
+				fontSize: this.isMobile ? '28px' : '32px',
+				color: '#ffffff',
+				backgroundColor: '#d32f2f',
+				padding: { x: 18, y: 12 },
+				align: 'center',
+			})
+			.setOrigin(0.5)
+			.setDepth(200);
 	}
 }
